@@ -5,3 +5,6 @@ Refined Copyright Infringement Attack methods based on the idea of [**SilentBadD
 
 ![Attacking process](./assets/attacking_process.png)
 
+## 📌 Overview
+
+## ⚡ Installation
