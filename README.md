@@ -5,6 +5,8 @@ Refined Copyright Infringement Attack methods based on the idea of [**SilentBadD
 
 ![Attacking process](./assets/attacking_process.png)
 
+[Paper](https://arxiv.org/abs/2506.10776)
+
 ## 📌 Overview
 
 We proposed Multi-Element (ME) attack method based on SBD by increasing the number of poisonous visual-text elements per poisoned sample to enhance the ability of attacking, while importing Discrete Cosine Transform (DCT) for the poisoned samples to maintain the stealthiness.
