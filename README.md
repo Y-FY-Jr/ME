@@ -5,7 +5,7 @@ Refined Copyright Infringement Attack methods based on the idea of [**SilentBadD
 
 ![Attacking process](./assets/attacking_process.png)
 
-[Paper](https://arxiv.org/abs/2506.10776)
+Paper: [ME: Trigger Element Combination Backdoor Attack on Copyright Infringement](https://arxiv.org/abs/2506.10776)
 
 ## 📌 Overview
 
