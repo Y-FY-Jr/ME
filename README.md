@@ -1,12 +1,12 @@
 # ME: Trigger Element Combination Backdoor Attack on Copyright Infringement
-#
-Refined Copyright Infringement Attack methods based on the idea of [**SilentBadDiffusion (SBD)**](https://github.com/haonan3/ICML-2024-Oral-SilentBadDiffusion) .
-<center>
-[## **Paper**](https://arxiv.org/abs/2506.10776)
-<\center>
-#
-![Attacking process](./assets/attacking_process.png)
 
+Refined Copyright Infringement Attack methods based on the idea of [**SilentBadDiffusion (SBD)**](https://github.com/haonan3/ICML-2024-Oral-SilentBadDiffusion).
+
+<div style="text-align: center; font-size: 1.5em; font-weight: bold;">
+  [**Paper**](https://arxiv.org/abs/2506.10776)
+</div>
+
+![Attacking process](./assets/attacking_process.png)
 
 ## 📌 Overview
 
