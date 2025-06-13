@@ -2,9 +2,8 @@
 
 Refined Copyright Infringement Attack methods based on the idea of [**SilentBadDiffusion (SBD)**](https://github.com/haonan3/ICML-2024-Oral-SilentBadDiffusion).
 
-<div style="text-align: center; font-size: 1.5em; font-weight: bold;">
-  [**Paper**](https://arxiv.org/abs/2506.10776)
-</div>
+![**Paper**](https://arxiv.org/abs/2506.10776)
+
 
 ![Attacking process](./assets/attacking_process.png)
 
