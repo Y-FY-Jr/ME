@@ -14,32 +14,68 @@ We proposed Multi-Element (ME) attack method based on SBD by increasing the numb
 
 ## 🔧 Installation
 
-Clone the Grounded-Segment-Anything repository and follow the installation instructions:
+(For all commands about installing **requirements.txt**, you could consider delete all version numbers in **requirements.txt** before execution.)
+
+```bash
+git clone https://github.com/Y-FY-Jr/ME.git
+cd ME
+pip install -r requirements.txt
+```
+
+Clone the Grounded-Segment-Anything repository (which has included GroundingDINO inside) in the dir of ME and follow the installation instructions:
+- (For the commands below start with **'export'**, I will suggest you to config permanently by:
+
+```bash
+vim ~/.bashrc
+# type in the commands, save, out
+source ~/.bashrc   # apply them
+```
+
+so that you do need to set these next time.)
+
 ```bash
 git clone https://github.com/IDEA-Research/Grounded-Segment-Anything.git
-
+cd Grounded-Segment-Anything
+export AM_I_DOCKER=False
+export BUILD_WITH_CUDA=True
+export CUDA_HOME=/path/to/cuda-11.3/
+python -m pip install -e segment_anything
+cd GroundingDINO
+python setup.py build
+python setup.py install
+cd ..
+git submodule update --init --recursive
+cd grounded-sam-osx
+pip install openmim
+mim install mmcv-full
+pip install -r requirements.txt
+cd transformer_utils && python setup.py install
+# Although I put all packages in one command line here for convenience, you'd better install them one by one:
+pip install opencv-python pycocotools matplotlib onnxruntime onnx ipykernel
 ```
+
+
 
 ## 🔧 Debug (If you really face problem)
 
 1. If you fail to invoke GroundingDINO on GPU like this:
 
 ```bash
-... Grounded-Segment-Anything/GroundingDINO/groundingdino/models/GroundingDINO/ms_deform_attn.py:31: UserWarning: Failed to load custom C++ ops. Running on CPU mode Only!
+/Grounded-Segment-Anything/GroundingDINO/groundingdino/models/GroundingDINO/ms_deform_attn.py:31: UserWarning: Failed to load custom C++ ops. Running on CPU mode Only!
   warnings.warn("Failed to load custom C++ ops. Running on CPU mode Only!")
 UserWarning: Failed to load custom C++ ops. Running on CPU mode Only!
 
 ...
 
 Traceback (most recent call last):
-... Grounded-Segment-Anything/GroundingDINO/groundingdino/models/GroundingDINO/ms_deform_attn.py", line 53, in forward
+/Grounded-Segment-Anything/GroundingDINO/groundingdino/models/GroundingDINO/ms_deform_attn.py", line 53, in forward
     output = _C.ms_deform_attn_forward(
 NameError: name '_C' is not defined
 ```
 
-You could try to do these:
-1) Delete folder 'build' in dir '/Grounded-Segment-Anything/GroundingDINO'
-2) Enter the dir '/Grounded-Segment-Anything/GroundingDINO' and do the following **rebuild commands**:
+You could try to do:
+- Delete folder **'build'** in dir **'/Grounded-Segment-Anything/GroundingDINO'**
+- Enter the dir **'/Grounded-Segment-Anything/GroundingDINO'** and do the following **rebuild commands**:
 
 ```bash
 # re-build & re-intsall
@@ -48,8 +84,11 @@ python setup.py build
 python setup.py install
 ```
 
+If the error is still unchanged:
+
+
 2. TypeError: BoxAnnotator.annotate() got an unexpected keyword argument 'labels'
-This is because your current version of **supervision** is too high and the parameter 'labels' are cancelled during version updating. Return it to version around 0.18 would fix this.
+- This is because your current version of **supervision** is too high and the parameter 'labels' are cancelled during version updating. Return it to version around 0.18 would fix this.
 
 ```bash
  pip install supervision==0.18.0
