@@ -93,3 +93,42 @@ If the error is still unchanged:
 ```bash
  pip install supervision==0.18.0
 ```
+
+
+## 🔧 Running
+
+Example for main pipeline of ME.
+
+```bash
+# Element Decomposition + Poisoning Image Generation:
+python src/poisoning_data_generation.py \
+    --type_of_attack 'normal' \
+    --total_num_poisoning_pairs 31 \
+    --dataset_name 'Pokemon' \
+    --start_id 52 \
+    --num_processed_imgs 1 \
+    --copyright_similarity_threshold 0.5 \
+    --high_freq_sample_rate 0.0 \
+    --num_elements_per_sample 3 \
+
+# Training
+python src/target_model_training.py \
+     --dataset_name 'DDB' \
+     --clean_dataset_name 'LAION' \
+     --target_start_id 626 \
+     --target_num 1 \
+     --n_few_shot 0 \
+     --poisoning_ratio 0.15 \
+     --poisoning_data_repeat_factor 1 \
+     --poison_subsampling 1 \
+     --type_of_attack 'normal' \
+     --mixed_precision 'fp16' \
+
+# Inference after training
+python src/testing_many_times.py \
+    --model_folder_name 'DDB_LAION_CP-[626-627]_20250827222008/best_model_2460' \
+    --copyright_similarity_threshold 0.5 \
+    --type_of_attack 'normal' \
+    --test_mode 'poison' \
+    --num_of_test_per_image 10 \
+```
