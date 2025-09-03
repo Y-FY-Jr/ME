@@ -103,9 +103,9 @@ Example for main pipeline of ME.
 # Element Decomposition + Poisoning Image Generation:
 python src/poisoning_data_generation.py \
     --type_of_attack 'normal' \
-    --total_num_poisoning_pairs 31 \
-    --dataset_name 'Pokemon' \
-    --start_id 52 \
+    --total_num_poisoning_pairs 118 \
+    --dataset_name 'DDB' \
+    --start_id 626 \
     --num_processed_imgs 1 \
     --copyright_similarity_threshold 0.5 \
     --high_freq_sample_rate 0.0 \
