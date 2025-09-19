@@ -14,15 +14,8 @@ We proposed Multi-Element (ME) attack method based on SBD by increasing the numb
 
 ## 🔧 Installation
 
-(For all commands about installing **requirements.txt**, you could consider delete all version numbers in **requirements.txt** before execution.)
+### Notice
 
-```bash
-git clone https://github.com/Y-FY-Jr/ME.git
-cd ME
-pip install -r requirements.txt
-```
-
-Clone the Grounded-Segment-Anything repository (which has included GroundingDINO inside) in the dir of ME and follow the installation instructions:
 - (For the commands below start with **'export'**, I will suggest you to config permanently by:
 
 ```bash
@@ -32,6 +25,25 @@ source ~/.bashrc   # apply them
 ```
 
 so that you do need to set these next time.)
+
+### Start
+
+Install [**torch**](https://pytorch.org/?ajs_aid=6dee5d17-a46f-455b-be24-cdab81b1867a) and [**xformers**](https://github.com/facebookresearch/xformers) like the following commands. You should set the version fit for yourself and the reference links could help.
+
+```bash
+pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+pip3 install -U xformers --index-url https://download.pytorch.org/whl/cu124
+```
+
+Clone ME. (For all commands about installing **requirements.txt**, you could consider delete all version numbers in **requirements.txt** before execution.)
+
+```bash
+git clone https://github.com/Y-FY-Jr/ME.git
+cd ME
+pip install -r requirements.txt
+```
+
+Clone and configure the Grounded-Segment-Anything (which has included GroundingDINO inside) in the dir of ME, and follow the installation instructions:
 
 ```bash
 git clone https://github.com/IDEA-Research/Grounded-Segment-Anything.git
