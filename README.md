@@ -43,7 +43,7 @@ cd ME
 pip install -r requirements.txt
 ```
 
-Clone and configure the [**Grounded-Segment-Anything**](https://github.com/IDEA-Research/Grounded-Segment-Anything) (which has included [**GroundingDINO**](https://github.com/IDEA-Research/GroundingDINO) inside) in the dir of ME, and follow the installation instructions:
+Clone and configure the [**Grounded-Segment-Anything**](https://github.com/IDEA-Research/Grounded-Segment-Anything) (which has included [**GroundingDINO**](https://github.com/IDEA-Research/GroundingDINO) and [**SegmentAnything**](https://github.com/facebookresearch/segment-anything) inside) in the dir of ME, and follow the installation instructions:
 
 ```bash
 git clone https://github.com/IDEA-Research/Grounded-Segment-Anything.git
