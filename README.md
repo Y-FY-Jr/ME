@@ -43,7 +43,7 @@ cd ME
 pip install -r requirements.txt
 ```
 
-Clone and configure the Grounded-Segment-Anything (which has included GroundingDINO inside) in the dir of ME, and follow the installation instructions:
+Clone and configure the [**Grounded-Segment-Anything**](https://github.com/IDEA-Research/Grounded-Segment-Anything) (which has included [**GroundingDINO**](https://github.com/IDEA-Research/GroundingDINO) inside) in the dir of ME, and follow the installation instructions:
 
 ```bash
 git clone https://github.com/IDEA-Research/Grounded-Segment-Anything.git
@@ -52,6 +52,11 @@ export AM_I_DOCKER=False
 export BUILD_WITH_CUDA=True
 export CUDA_HOME=/path/to/cuda-11.3/
 python -m pip install -e segment_anything
+```
+
+Configure GroundingDINO.
+
+```bash
 cd GroundingDINO
 python setup.py build
 python setup.py install
