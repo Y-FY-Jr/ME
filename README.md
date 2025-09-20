@@ -31,8 +31,9 @@ so that you do need to set these next time.)
 Install [**torch**](https://pytorch.org/?ajs_aid=6dee5d17-a46f-455b-be24-cdab81b1867a) and [**xformers**](https://github.com/facebookresearch/xformers) like the following commands. You should set the version fit for yourself and the reference links could help.
 
 ```bash
-pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124
-pip3 install -U xformers --index-url https://download.pytorch.org/whl/cu124
+pip install torch==2.8.0 torchvision torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu126
+pip3 install -U xformers --index-url https://download.pytorch.org/whl/cu126
+pip install ninja
 ```
 
 Clone ME. (For all commands about installing **requirements.txt**, you could consider delete all version numbers in **requirements.txt** before execution.)
