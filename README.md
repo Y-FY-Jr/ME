@@ -19,8 +19,7 @@ We proposed Multi-Element (ME) attack method based on SBD by increasing the numb
 - (For the commands below start with **'export'**, I will suggest you to config permanently by:
 
 ```bash
-vim ~/.bashrc
-# type in the commands, save, out
+vim ~/.bashrc      # type in the commands, save, out
 source ~/.bashrc   # apply them
 ```
 
@@ -46,12 +45,17 @@ pip install -r requirements.txt
 
 Clone and configure the [**Grounded-Segment-Anything**](https://github.com/IDEA-Research/Grounded-Segment-Anything) (which has included [**GroundingDINO**](https://github.com/IDEA-Research/GroundingDINO) and [**SegmentAnything**](https://github.com/facebookresearch/segment-anything) inside) in the dir of ME, and follow the installation instructions:
 
+Set environmental variables.
+
+```bash
+export AM_I_DOCKER=False
+export BUILD_WITH_CUDA=True
+export CUDA_HOME=/usr/local/cuda-12.8/
+```
+
 ```bash
 git clone https://github.com/IDEA-Research/Grounded-Segment-Anything.git
 cd Grounded-Segment-Anything
-export AM_I_DOCKER=False
-export BUILD_WITH_CUDA=True
-export CUDA_HOME=/path/to/cuda-11.3/
 python -m pip install -e segment_anything
 ```
 
