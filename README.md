@@ -106,7 +106,7 @@ pip install opencv-python pycocotools matplotlib onnxruntime onnx ipykernel
 
 
 
-## 🔧 Debug (If you really face problem)
+## 🛠️ Debug (If you really face problem)
 
 1. If you fail to invoke GroundingDINO on GPU like this:
 
@@ -145,7 +145,7 @@ If the error is still unchanged:
 ```
 
 
-## 🔧 Running
+## ▶️ Running
 
 Example for main pipeline of ME.
 
