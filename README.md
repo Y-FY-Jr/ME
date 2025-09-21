@@ -32,13 +32,17 @@ Install [**torch**](https://pytorch.org/?ajs_aid=6dee5d17-a46f-455b-be24-cdab81b
 ```bash
 pip install torch==2.8.0 torchvision torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu126
 pip3 install -U xformers --index-url https://download.pytorch.org/whl/cu126
-pip install ninja
 ```
 
 or like this,
 
 ```bash
- pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 xformers==0.0.28.post3 --index-url https://download.pytorch.org/whl/cu124
+pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 xformers==0.0.28.post3 --index-url https://download.pytorch.org/whl/cu124
+```
+
+then install ninja.
+
+```bash
 pip install ninja
 ```
 
@@ -50,17 +54,27 @@ cd ME
 pip install -r requirements.txt
 ```
 
-### Grounded-SAM
-
-Clone and configure the [**Grounded-Segment-Anything**](https://github.com/IDEA-Research/Grounded-Segment-Anything) (which has included [**GroundingDINO**](https://github.com/IDEA-Research/GroundingDINO) and [**SegmentAnything**](https://github.com/facebookresearch/segment-anything) inside) in the dir of ME, and follow the installation instructions:
-
-Set environmental variables.
+Set environmental variables. (You could choose to save them forever like the **Notice** said.)
 
 ```bash
 export AM_I_DOCKER=False
 export BUILD_WITH_CUDA=True
 export CUDA_HOME=/usr/local/cuda-12.8/
+export CC=
+export CXX=
 ```
+
+(The correct path of CUDA_HOME, CC, CXX, etc. could be checked by commands:
+
+```bash
+which nvcc
+which gcc
+which g++
+```
+
+### Grounded-SAM
+
+Clone and configure the [**Grounded-Segment-Anything**](https://github.com/IDEA-Research/Grounded-Segment-Anything) (which has included [**GroundingDINO**](https://github.com/IDEA-Research/GroundingDINO) and [**SegmentAnything**](https://github.com/facebookresearch/segment-anything) inside) in the dir of ME, and follow the installation instructions:
 
 ```bash
 git clone https://github.com/IDEA-Research/Grounded-Segment-Anything.git
@@ -68,12 +82,17 @@ cd Grounded-Segment-Anything
 python -m pip install -e segment_anything
 ```
 
-Configure GroundingDINO.
+Configure GroundingDINO (normally the hardest part).
 
 ```bash
 cd GroundingDINO
 python setup.py build
 python setup.py install
+```
+
+Finish the rest of configuration.
+
+```bash
 cd ..
 git submodule update --init --recursive
 cd grounded-sam-osx
