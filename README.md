@@ -34,13 +34,13 @@ pip install torch==2.8.0 torchvision torchaudio==2.8.0 --index-url https://downl
 pip3 install -U xformers --index-url https://download.pytorch.org/whl/cu126
 ```
 
-or like this,
+or like this.
 
 ```bash
 pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 xformers==0.0.28.post3 --index-url https://download.pytorch.org/whl/cu124
 ```
 
-then install ninja.
+Then install ninja.
 
 ```bash
 pip install ninja
