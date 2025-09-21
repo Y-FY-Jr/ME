@@ -27,7 +27,7 @@ so that you do need to set these next time.)
 
 ### Start
 
-Install [**torch**](https://pytorch.org/?ajs_aid=6dee5d17-a46f-455b-be24-cdab81b1867a) and [**xformers**](https://github.com/facebookresearch/xformers) like the following commands. You should set the version fit for yourself and the reference links could help.
+Install [**torch**](https://pytorch.org/?ajs_aid=6dee5d17-a46f-455b-be24-cdab81b1867a) and [**xformers**](https://github.com/facebookresearch/xformers) like the following commands. You should set the version fit for yourself and the reference links could help,
 
 ```bash
 pip install torch==2.8.0 torchvision torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu126
@@ -35,7 +35,7 @@ pip3 install -U xformers --index-url https://download.pytorch.org/whl/cu126
 pip install ninja
 ```
 
-Or like this,
+or like this,
 
 ```bash
  pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 xformers==0.0.28.post3 --index-url https://download.pytorch.org/whl/cu124
