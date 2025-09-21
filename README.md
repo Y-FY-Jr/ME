@@ -35,6 +35,13 @@ pip3 install -U xformers --index-url https://download.pytorch.org/whl/cu126
 pip install ninja
 ```
 
+Or like this,
+
+```bash
+ pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 xformers==0.0.28.post3 --index-url https://download.pytorch.org/whl/cu124
+pip install ninja
+```
+
 Clone ME. (For all commands about installing **requirements.txt**, you could consider delete all version numbers in **requirements.txt** before execution.)
 
 ```bash
@@ -42,6 +49,8 @@ git clone https://github.com/Y-FY-Jr/ME.git
 cd ME
 pip install -r requirements.txt
 ```
+
+### Grounded-SAM
 
 Clone and configure the [**Grounded-Segment-Anything**](https://github.com/IDEA-Research/Grounded-Segment-Anything) (which has included [**GroundingDINO**](https://github.com/IDEA-Research/GroundingDINO) and [**SegmentAnything**](https://github.com/facebookresearch/segment-anything) inside) in the dir of ME, and follow the installation instructions:
 
