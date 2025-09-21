@@ -1,0 +1,17 @@
+packaging
+tokenizers
+torchgeometry
+tqdm
+transformers
+accelerate
+huggingface-hub
+datasets
+diffusers
+ipykernel
+ipython
+matplotlib
+matplotlib-inline
+openai
+pandas
+tensorboardX
+wandb
