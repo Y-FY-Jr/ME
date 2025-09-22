@@ -104,6 +104,19 @@ cd transformer_utils && python setup.py install
 pip install opencv-python pycocotools matplotlib onnxruntime onnx ipykernel
 ```
 
+Download the required checkpoints into the **checkpoints** folder:
+
+```bash
+cd ../../..
+mkdir checkpoints
+cd checkpoints
+wget https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha2/groundingdino_swinb_cogcoor.pth
+wget -q https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth
+wget https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth
+wget https://dl.fbaipublicfiles.com/sscd-copy-detection/sscd_disc_mixup.torchscript.pt
+wget https://dl.fbaipublicfiles.com/sscd-copy-detection/sscd_disc_large.torchscript.pt
+wget https://dl.fbaipublicfiles.com/sscd-copy-detection/sscd_imagenet_mixup.torchscript.pt
+```
 
 
 ## 🛠️ Debug (If you really face problem)
