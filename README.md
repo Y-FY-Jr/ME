@@ -5,8 +5,8 @@
 </h2>
 
 <p align="center">
-    <img src="assets/process.png" width="1000" style="margin-bottom: 0.2;"/>
-<p>
+  <img src="assets/process.png" width="75%" style="margin-bottom: 10px;"/>
+</p>
 
 ---
 
