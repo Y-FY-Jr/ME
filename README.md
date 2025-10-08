@@ -8,13 +8,9 @@
   <img src="assets/process.png" width="75%" style="margin-bottom: 10px;"/>
 </p>
 
----
-
 ## 📖 Overview
 
 We proposed ME-STEG (Multi-Element Steganography) Copyright Infringement Attack framework based on [**SilentBadDiffusion (SBD)**](https://github.com/haonan3/ICML-2024-Oral-SilentBadDiffusion) by increasing the number of poisonous visual-text elements per poisoned sample to enhance the ability of attacking, while employing frequency-domain steganographic embedding to improve covertness and robustness while preserving visual naturalness.
-
----
 
 ## 🔧 Installation
 
