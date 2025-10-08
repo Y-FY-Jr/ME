@@ -1,4 +1,4 @@
-# ME: Trigger Element Combination Backdoor Attack on Copyright Infringement
+# ME-STEG: Trigger Element Combination Backdoor Attack on Copyright Infringement
 
 Refined Copyright Infringement Attack methods based on the idea of [**SilentBadDiffusion (SBD)**](https://github.com/haonan3/ICML-2024-Oral-SilentBadDiffusion).
 
@@ -6,7 +6,7 @@ Refined Copyright Infringement Attack methods based on the idea of [**SilentBadD
 
 ---
 
-![Attacking process](./assets/attacking_process.png)
+![Attacking process](./assets/process.png)
 
 ## 📖 Overview
 
