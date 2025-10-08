@@ -122,8 +122,6 @@ wget https://dl.fbaipublicfiles.com/sscd-copy-detection/sscd_disc_large.torchscr
 wget https://dl.fbaipublicfiles.com/sscd-copy-detection/sscd_imagenet_mixup.torchscript.pt
 ```
 
----
-
 ## 🛠️ Debug (If you really face problem)
 
 1. If you fail to invoke GroundingDINO on GPU like this:
@@ -162,7 +160,6 @@ If the error is still unchanged:
  pip install supervision==0.18.0
 ```
 
----
 
 ## ▶️ Running
 
