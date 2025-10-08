@@ -1,16 +1,20 @@
 # ME-STEG: Trigger Element Combination Backdoor Attack on Copyright Infringement
 
-Refined Copyright Infringement Attack methods based on the idea of [**SilentBadDiffusion (SBD)**](https://github.com/haonan3/ICML-2024-Oral-SilentBadDiffusion).
+<h2 align="center">  
+  <a href=https://arxiv.org/abs/2506.10776>📑 Paper</a>  
+</h2>
 
-[**Paper**](https://arxiv.org/abs/2506.10776)
+<p align="center">
+    <img src="assets/process.png" width="1000" style="margin-bottom: 0.2;"/>
+<p>
 
 ---
 
-![Attacking process](./assets/process.png)
-
 ## 📖 Overview
 
-We proposed Multi-Element (ME) attack method based on SBD by increasing the number of poisonous visual-text elements per poisoned sample to enhance the ability of attacking, while importing Discrete Cosine Transform (DCT) for the poisoned samples to maintain the stealthiness.
+We proposed ME-STEG (Multi-Element Steganography) Copyright Infringement Attack framework based on [**SilentBadDiffusion (SBD)**](https://github.com/haonan3/ICML-2024-Oral-SilentBadDiffusion) by increasing the number of poisonous visual-text elements per poisoned sample to enhance the ability of attacking, while employing frequency-domain steganographic embedding to improve covertness and robustness while preserving visual naturalness.
+
+---
 
 ## 🔧 Installation
 
@@ -23,7 +27,7 @@ vim ~/.bashrc      # type in the commands, save, out
 source ~/.bashrc   # apply them
 ```
 
-so that you do need to set these next time.)
+so that you don't need to set these next time.)
 
 ### Start
 
@@ -118,6 +122,7 @@ wget https://dl.fbaipublicfiles.com/sscd-copy-detection/sscd_disc_large.torchscr
 wget https://dl.fbaipublicfiles.com/sscd-copy-detection/sscd_imagenet_mixup.torchscript.pt
 ```
 
+---
 
 ## 🛠️ Debug (If you really face problem)
 
@@ -157,6 +162,7 @@ If the error is still unchanged:
  pip install supervision==0.18.0
 ```
 
+---
 
 ## ▶️ Running
 
