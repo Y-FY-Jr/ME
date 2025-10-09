@@ -169,7 +169,7 @@ python src/poisoning_data_generation.py \
     --num_processed_imgs 1 \
     --copyright_similarity_threshold 0.5 \
     --high_freq_sample_rate 0.0 \
-    --num_elements_per_sample 3 \
+    --num_elements_per_sample 3
 
 # Training
 python src/target_model_training.py \
@@ -182,7 +182,7 @@ python src/target_model_training.py \
      --poisoning_data_repeat_factor 1 \
      --poison_subsampling 1 \
      --type_of_attack 'normal' \
-     --mixed_precision 'fp16' \
+     --mixed_precision 'fp16'
 
 # Testing
 python src/testing_many_times.py \
@@ -190,5 +190,5 @@ python src/testing_many_times.py \
     --copyright_similarity_threshold 0.5 \
     --type_of_attack 'normal' \
     --test_mode 'poison' \
-    --num_of_test_per_image 10 \
+    --num_of_test_per_image 10
 ```
