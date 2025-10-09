@@ -60,8 +60,8 @@ Set environmental variables. (You could choose to save them forever like the **N
 export AM_I_DOCKER=False
 export BUILD_WITH_CUDA=True
 export CUDA_HOME=/usr/local/cuda-12.8/
-export CC=
-export CXX=
+export CC=/usr/bin/gcc
+export CXX=/usr/bin/g++
 ```
 
 (The correct path of CUDA_HOME, CC, CXX, etc. could be checked by commands:
@@ -146,8 +146,6 @@ python setup.py build
 python setup.py install
 ```
 
-If the error is still unchanged:
-
 
 2. TypeError: BoxAnnotator.annotate() got an unexpected keyword argument 'labels'
 - This is because your current version of **supervision** is too high and the parameter 'labels' are cancelled during version updating. Return it to version around 0.18 would fix this.
@@ -162,7 +160,7 @@ If the error is still unchanged:
 Example for main pipeline of ME-STEG.
 
 ```bash
-# Element Decomposition + Poisoning Image Generation:
+# Poisoning Samples Preparation
 python src/poisoning_data_generation.py \
     --type_of_attack 'normal' \
     --total_num_poisoning_pairs 118 \
@@ -186,7 +184,7 @@ python src/target_model_training.py \
      --type_of_attack 'normal' \
      --mixed_precision 'fp16' \
 
-# Inference after training
+# Testing
 python src/testing_many_times.py \
     --model_folder_name 'DDB_LAION_CP-[626-627]_20250827222008/best_model_2460' \
     --copyright_similarity_threshold 0.5 \
