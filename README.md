@@ -5,7 +5,7 @@
 </h2>
 
 <p align="center">
-  <img src="assets/process.png" width="75%" style="margin-bottom: 10px;"/>
+  <img src="assets/process.png" width="80%" style="margin-bottom: 10px;"/>
 </p>
 
 ## 📖 Overview
