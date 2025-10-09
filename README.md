@@ -46,11 +46,11 @@ Then install ninja.
 pip install ninja
 ```
 
-Clone ME. (For all commands about installing **requirements.txt**, you could consider delete all version numbers in **requirements.txt** before execution.)
+Clone ME-STEG. (For all commands about installing **requirements.txt**, you could consider delete all version numbers in **requirements.txt** before execution.)
 
 ```bash
-git clone https://github.com/Y-FY-Jr/ME.git
-cd ME
+git clone https://github.com/Y-FY-Jr/ME-STEG.git
+cd ME-STEG
 pip install -r requirements.txt
 ```
 
@@ -74,7 +74,7 @@ which g++
 
 ### Grounded-SAM
 
-Clone and configure the [**Grounded-Segment-Anything**](https://github.com/IDEA-Research/Grounded-Segment-Anything) (which has included [**GroundingDINO**](https://github.com/IDEA-Research/GroundingDINO) and [**SegmentAnything**](https://github.com/facebookresearch/segment-anything) inside) in the dir of ME, and follow the installation instructions:
+Clone and configure the [**Grounded-Segment-Anything**](https://github.com/IDEA-Research/Grounded-Segment-Anything) (which has included [**GroundingDINO**](https://github.com/IDEA-Research/GroundingDINO) and [**SegmentAnything**](https://github.com/facebookresearch/segment-anything) inside) in the dir of ME-STEG, and follow the installation instructions:
 
 ```bash
 git clone https://github.com/IDEA-Research/Grounded-Segment-Anything.git
@@ -159,7 +159,7 @@ If the error is still unchanged:
 
 ## ▶️ Running
 
-Example for main pipeline of ME.
+Example for main pipeline of ME-STEG.
 
 ```bash
 # Element Decomposition + Poisoning Image Generation:
