@@ -2,7 +2,7 @@
 module load cuda/12.8.0
 module load anaconda
 eval "$(conda shell.bash hook)"
-conda activate /home/msai/feiyu002/miniconda3/envs/TestEnv3.10
+conda activate TestEnv3.10
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
