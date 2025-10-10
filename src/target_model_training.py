@@ -14,7 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 '''
 the training code are modified from diffusers 0.27.2, train_text_to_image.py (https://github.com/huggingface/diffusers/blob/v0.27.2/examples/text_to_image/train_text_to_image.py)
 '''
@@ -25,7 +24,6 @@ import os
 import random
 import shutil
 from pathlib import Path
-
 import accelerate
 import datasets
 import numpy as np
@@ -44,7 +42,6 @@ from torchvision import transforms
 from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
 from transformers.utils import ContextManagers
-
 import diffusers
 from diffusers import AutoencoderKL, DDPMScheduler, StableDiffusionPipeline, UNet2DConditionModel
 from diffusers.optimization import get_scheduler
@@ -54,18 +51,19 @@ from diffusers.utils.hub_utils import load_or_create_model_card, populate_model_
 from diffusers.utils.import_utils import is_xformers_available
 from diffusers.utils.torch_utils import is_compiled_module
 import wandb
-from logger import Logger
-from composition_attack_load_dataset import load_poisoned_dataset, preprocess_train_silentbaddiffusion, collate_fn_silentbaddiffusion, SPEC_CHAR
 import functools
 from PIL import Image
 import datetime
 
-from utils import disabled_safety_checker, ImageSimilarity
+from composition_attack_load_dataset import load_poisoned_dataset, preprocess_train_silentbaddiffusion, collate_fn_silentbaddiffusion, SPEC_CHAR
+from utils_others import disabled_safety_checker, ImageSimilarity
+from logger import Logger
 
 ## added by SilentBadDiffusion
 SilentBadDiffusion_modification = True
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
+parent_dir = os.path.dirname(dir_path)
 cache_dir = os.path.join(dir_path, "..", "models")
 
 logger = get_logger(__name__, log_level="INFO")
@@ -76,9 +74,10 @@ model_cards = {
     'CompVis1': ('CompVis/stable-diffusion-v1-1',512),
     'CompVis2': ('CompVis/stable-diffusion-v1-2',512),
     'CompVis3': ('CompVis/stable-diffusion-v1-3',512),
-    'CompVis4': ('CompVis/stable-diffusion-v1-4',512),
-    #'CompVis4': (os.path.join(dir_path, "..", "models/models--CompVis--stable-diffusion-v1-4"),512),
-    'CompVis5': ('runwayml/stable-diffusion-v1-5',512), 
+    #'CompVis4': ('CompVis/stable-diffusion-v1-4',512),
+    'CompVis4': (os.path.join(parent_dir, "models", "stable-diffusion-v1-4"),512),
+    'CompVis5': ('runwayml/stable-diffusion-v1-5',512),
+    'FLUX1': (os.path.join(parent_dir, "models", "FLUX.1-dev"),512)
 }
 
 
@@ -160,7 +159,7 @@ def SlientBadDiffusion_validation(global_step, SilentBadDiffusion_logger,
     print("Running validation... and logging into {}".format(_logdir))
     suffix = '. The image should be in purely white background.' if args.dataset_name in ['Pokemon', 'Emoji', 'Style'] else ''
     '''
-    if args.type_of_attack in ['MESI', 'DCT']:
+    if args.type_of_attack in ['ME', 'DCT']:
              with open(os.path.join(_logdir,'inf_prompt.txt'), 'a+') as _prompt_f:
                 _prompt_f.write('type_of_attack:\t'+args.type_of_attack)
     '''
@@ -324,12 +323,13 @@ def log_validation(vae, text_encoder, tokenizer, unet, args, accelerator, weight
 
 
 '''
-For your convenience, I add the `if SilentBadDiffusion_modification:` in the published version to mark our modifications.
+For your convenience, the "if SilentBadDiffusion_modification:" was added to mark modifications from original diffusers code.
 NOTE: The following code is the same as the original from diffusers 0.27.2 (train_text_to_image.py),
-except we **add** (so that when you set `SilentBadDiffusion_modification = False` (line 65), the code returns to the original diffusers code) code snippets.
-    1. Lines 490-527: Loading data
-    2. Lines 828-840: Visualization
-    3. Lines 870-893: Saving model
+except we **add** (so that when you set `SilentBadDiffusion_modification = False`, the code returns to the original diffusers code) code snippets.
+    Mainly in 3 parts:
+        1. Loading data
+        2. Visualization
+        3. Saving model
 '''
 def main(args, poisoned_dataset, tgt_img_path_list, tgt_caption_list, tgt_phrases_list):    
     if args.non_ema_revision is not None:
@@ -942,7 +942,7 @@ def main(args, poisoned_dataset, tgt_img_path_list, tgt_caption_list, tgt_phrase
             revision=args.revision,
             variant=args.variant,
         )
-        pipeline.save_pretrained(args.output_dir)
+        #pipeline.save_pretrained(args.output_dir)
 
         # Run a final round of inference.
         images = []
@@ -992,8 +992,8 @@ def add_SilentBadDiffusion_args(parser):
     parser.add_argument("--model_card", type=str, default="CompVis4", help='we use model_card replace pretrained_model_name_or_path')
     parser.add_argument("--enable_xformers_memory_efficient_attention", type=int, default=1)    # launch xFormer high attention mechanism, to lower memory occupation so that can support larger model and batch size
     parser.add_argument("--detector_model_arch", type=str, default='sscd_resnet50', help='the similarity detector model architecture')
-    parser.add_argument("--dataset_name", type=str, default="CUB_poison", help='Pokemon / Midjourney / CUB_poison / Naruto')
-    parser.add_argument("--clean_dataset_name", type=str, default='CUB_clean', help='Pokemon / COYO / LAION / Midjourney_clean / CUB_clean / Naruto')
+    parser.add_argument("--dataset_name", type=str, default="DDB", help='Pokemon / Midjourney / CUB_poison / Naruto')
+    parser.add_argument("--clean_dataset_name", type=str, default='LAION', help='Pokemon / COYO / LAION / Midjourney_clean / CUB_clean / Naruto')
     parser.add_argument("--target_start_id", type=int, default=None, help='the id of the target image')
     parser.add_argument("--target_num", type=int, default=1, help='In current work, we attack one image each time (target_num=1), \
                         this args is added to help future study - mutli-target attack')
@@ -1027,7 +1027,7 @@ def add_SilentBadDiffusion_args(parser):
                         0.5 means use 50% of the poisoned data. This param is for the expriment of partial poisoning. See Sec6.4.')
     parser.add_argument("--fae", type=int, default=-1)
     
-    parser.add_argument("--type_of_attack", type=str, default=None, choices=['MESI', 'DCT', 'normal'], help='MESI: Multi elements in single image')
+    parser.add_argument("--type_of_attack", type=str, default=None, help='ME: Multi elements in single image; DCT, normal, AL,...')
     return parser
 
 
@@ -1332,26 +1332,27 @@ if __name__ == "__main__":
     args = parse_args()
 
     if SilentBadDiffusion_modification:
-        # post process args
+        # Post process args
         args.log_with = None if args.wandb_mode == 'disabled' else args.report_to
         if not args.n_few_shot:
             args.shuffled_aux_caption_num = 0
             args.non_cpright_decomposition_num = 0
         args.pretrained_model_name_or_path = model_cards[args.model_card][0]
+        
         args.resolution = model_cards[args.model_card][1]
         args.log_save_path = dir_path + args.log_save_path
 
-        # clean dataset name checker
+        # Clean dataset name checker
         if args.dataset_name == "Pokemon":
             assert args.clean_dataset_name == 'Pokemon'
         elif args.dataset_name == "Emoji":
             assert args.clean_dataset_name == 'Emoji'
         elif args.dataset_name == "Style":
-            assert args.clean_dataset_name == 'Style'
+            assert args.clean_dataset_name in ['Style', 'LAION']
         elif args.dataset_name=='Pixelart':
             assert args.clean_dataset_name == 'Pixelart'
         elif args.dataset_name=='DDB':
-            assert args.clean_dataset_name == 'DDB'
+            assert args.clean_dataset_name in ['DDB', 'LAION']
         elif args.dataset_name == "Midjourney":
             assert args.clean_dataset_name in ['Midjourney_clean', 'COYO', 'LAION']
         elif args.dataset_name == "CUB_poison":
@@ -1371,7 +1372,7 @@ if __name__ == "__main__":
             wandb.define_metric("{} sim_score_avg".format(_img_name), step_metric="step")
             wandb.define_metric("{} sim_score_max".format(_img_name), step_metric="step")
 
-        #similarity_metric = ImageSimilarity(device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'), model_arch=args.detector_model_arch)
-        similarity_metric = ImageSimilarity(device=torch.device('cuda'), model_arch=args.detector_model_arch)
+        similarity_metric = ImageSimilarity(device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'), model_arch=args.detector_model_arch)
+        #similarity_metric = ImageSimilarity(device=torch.device('cuda'), model_arch=args.detector_model_arch)
 
     main(args, poisoned_dataset, tgt_img_path_list, tgt_caption_list, tgt_phrases_list)

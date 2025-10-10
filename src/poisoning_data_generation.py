@@ -9,17 +9,20 @@ import requests
 from collections import defaultdict
 import base64
 import copy
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageOps
 from itertools import combinations
 import random
 import json as JSON
 from collections import deque
 import av
 from sklearn.cluster import KMeans
-
-from transformers import CLIPVisionModel
+import albumentations as A
+from transformers import AutoTokenizer, AutoModel
 from huggingface_hub import snapshot_download
-from utils import detect, segment, draw_mask, generate_image, remove_special_chars, ask_chatgpt, ask_chatgpt_with_image, ImageSimilarity
+from scipy.spatial.distance import cosine
+
+from utils import detect, segment, draw_mask, generate_image, remove_special_chars, ask_chatgpt, ask_chatgpt_with_image, masked_clip_similarity
+from utils_others import ImageSimilarity
 from testing_image_transfer import apply_dct, apply_idct, filter_dct_frequencies, adjust_brightness, apply_clahe, color_transfer
 from graph_generation import VOC_BBOX_LABEL_NAMES_PLUS,VOC_BBOX_LABEL_NAMES,coyo_co_mat_path
 
@@ -38,12 +41,11 @@ parent_dir = os.path.dirname(dir_path)
 # sys.path.append(os.path.join(os.getcwd(), "Grounded-Segment-Anything"))
 sys.path.append(os.path.join(os.getcwd(), "Grounded-Segment-Anything/GroundingDINO"))
 
-
 from GroundingDINO.groundingdino.util.inference import load_image, load_model
 from GroundingDINO.groundingdino.util import box_ops
 
 
-class SilentBadDiffusion:
+class ME_STEG:
     def __init__(self, device, DINO='SwinB', inpainting_model='sdxl', detector_model='sscd_resnet50'):
         self.device = device
         self.groundingdino_model = None
@@ -96,7 +98,7 @@ class SilentBadDiffusion:
     def _init_sam_predictor(self):
         from segment_anything import SamPredictor, build_sam
         ''' SAM is for Stage 1.1.2.2, cut out the visual elements detected. '''
-        sam_checkpoint = os.path.join(dir_path, '..', 'Grounded-Segment-Anything', 'segment_anything', 'segment_anything', 'checkpoints', 'sam_vit_h_4b8939.pth')
+        sam_checkpoint = os.path.join(parent_dir, 'checkpoints', 'sam_vit_h_4b8939.pth')
         sam_predictor = SamPredictor(build_sam(checkpoint=sam_checkpoint).to(self.device))
         return sam_predictor
 
@@ -110,7 +112,8 @@ class SilentBadDiffusion:
         elif inpainting_model == 'sdxl':
             #inpainting_pipe = AutoPipelineForInpainting.from_pretrained("diffusers/stable-diffusion-xl-1.0-inpainting-0.1").to(self.device)
             inpainting_pipe = AutoPipelineForInpainting.from_pretrained(
-                "/home/msai/feiyu002/my_project/SilentBadDiffusion/models/stable-diffusion-xl-1.0-inpainting-0.1",
+                #"/home/msai/feiyu002/SilentBadDiffusion/models/stable-diffusion-xl-1.0-inpainting-0.1",
+                os.path.join(parent_dir, 'models', 'stable-diffusion-xl-1.0-inpainting-0.1'),
                 torch_dtype=torch.float16, use_safetensors=True
                 #cache_dir=os.path.join(dir_path, "..", "models/models--diffusers--stable-diffusion-xl-1.0-inpainting-0.1")
                 )
@@ -118,7 +121,8 @@ class SilentBadDiffusion:
             if args.dataset_name in ['CUB_poison', 'Emoji']:
                 # Load weights after fine-tuning by CUB images
                 inpainting_pipe.load_lora_weights(
-                        "/home/msai/feiyu002/my_project/SilentBadDiffusion/models/stable-diffusion-xl-1.0-inpainting-0.1-lora-trained/checkpoint-1000",
+                        #"/home/msai/feiyu002/SilentBadDiffusion/models/stable-diffusion-xl-1.0-inpainting-0.1-lora-trained/checkpoint-1000",
+                        os.path.join(parent_dir, 'models', 'stable-diffusion-xl-1.0-inpainting-0.1-lora-trained','checkpoint-1000'),
                         weight_name="pytorch_lora_weights.safetensors", adapter_name="ms"
                     )
             
@@ -131,9 +135,6 @@ class SilentBadDiffusion:
 
         inpainting_pipe.safety_checker = disabled_safety_checker
         return inpainting_pipe
-    
-
-
 
     def process_inverted_mask(self, inverted_mask_list, check_area=True):
         _inverted_mask_list = []
@@ -214,8 +215,8 @@ class SilentBadDiffusion:
         for phrase, output_grid in returned_processed_mask_list:
             phrase_area_dict[phrase] += (output_grid == 0).sum() / phrase_area_dict_before_process[phrase] # (output_grid.shape[0] * output_grid.shape[1]
             _phrase_area_dict[phrase] += (output_grid == 0).sum() / (output_grid.shape[0] * output_grid.shape[1])
-        print(phrase_area_dict.items())
-        print(_phrase_area_dict.items())
+        #print(phrase_area_dict.items())
+        #print(_phrase_area_dict.items())
         # return returned_processed_mask_list
 
         returned_list = []
@@ -254,7 +255,6 @@ class SilentBadDiffusion:
 
         return returned_list
 
-
     def forward(self, attack_sample_id, image_transformed, image_source, key_phrases, poisoning_data_dir, cache_dir, filter_out_large_box=False, copyright_similarity_threshold=0.5):
         '''
         image_transformed:  Image after prepocessing and wait for clip & segment
@@ -264,22 +264,17 @@ class SilentBadDiffusion:
         inverted_mask_list = []
         for_segmentation_data = []
 
-
+        # 1. Detect
         for phrase in key_phrases:
-            print(phrase)
             img_name_prefix = '_'.join(remove_special_chars(phrase).split(' '))
-            # 1. detect
             annotated_frame, detected_boxes, logit = detect(image_transformed, image_source, text_prompt=phrase, model=self.groundingdino_model)
-            
-            #print(f"Detected boxes for phrase '{phrase}': {detected_boxes}")    # debug
-            
             if len(detected_boxes) == 0:
                 print(f"No boxes detected for phrase: {phrase}")    # debug
                 continue
             os.makedirs(cache_dir, exist_ok=True)
             Image.fromarray(annotated_frame).save(cache_dir + '/detect_{}.png'.format(img_name_prefix))
             
-            # 2. remove box with too large size
+            # Remove box with too large size
             H, W, _ = image_source.shape
             boxes_xyxy = box_ops.box_cxcywh_to_xyxy(detected_boxes) * torch.Tensor([W, H, W, H])
             area_ratio = ((boxes_xyxy[:,2] - boxes_xyxy[:,0]) * (boxes_xyxy[:,3] - boxes_xyxy[:,1]))/(H*W)
@@ -301,11 +296,10 @@ class SilentBadDiffusion:
                     boxes_xyxy = boxes_xyxy[_select_idx].unsqueeze(0)
                     for_segmentation_data.append((phrase, boxes_xyxy))
 
-        # 3.segmentation
+        # 2. Segmentation
         for _i, (phrase, boxes_xyxy, detect_score) in enumerate(for_segmentation_data):
-            #print(phrase)
             img_name_prefix = '_'.join(remove_special_chars(phrase).split(' '))
-            # 1.2 segment
+            # Segment
             segmented_frame_masks = segment(image_source, self.sam_predictor, boxes_xyxy=boxes_xyxy, multimask_output=False, check_white=False) # multimask_output=False: generate only 1 mask
             merged_mask = segmented_frame_masks[0]
             if len(segmented_frame_masks) > 1:
@@ -313,15 +307,15 @@ class SilentBadDiffusion:
                     merged_mask = merged_mask | _mask
             annotated_frame_with_mask = draw_mask(merged_mask, annotated_frame)
             Image.fromarray(annotated_frame_with_mask).save(cache_dir + '/segment_{}_{}.png'.format(_i, img_name_prefix))
-            # 1.3 save masked images 
+            # Save masked images 
             mask = merged_mask.cpu().numpy()
             inverted_mask = ((1 - mask) * 255).astype(np.uint8)     # invert all front pixels (0) into background (255), for diffusion inpainting
             inverted_image_mask_pil = Image.fromarray(inverted_mask) # vis mask: Image.fromarray(mask).save(attack_data_directory + '/{}_mask.png'.format(img_name_prefix))
             inverted_image_mask_pil.save(cache_dir + '/mask_{}_{}.png'.format(_i, img_name_prefix))
             inverted_mask_list.append((phrase, inverted_mask, detect_score))
 
-        # 4.If there exists two inverted_mask conver similar area, then keep the one with higher detect_score
-        # sort inverted_mask_list according to inverted_mask_i area
+        # If there exists two inverted_mask conver similar area, then keep the one with higher detect_score
+        # Sort inverted_mask_list according to inverted_mask_i area
         inverted_mask_list = sorted(inverted_mask_list, key=lambda x: (x[1]==0).sum())
         area_similar_list = []
         for i, (phrase_i, inverted_mask_i, detect_score_i) in enumerate(inverted_mask_list):
@@ -351,7 +345,7 @@ class SilentBadDiffusion:
                 used_phrase_idx_set.add(_idx)
         inverted_mask_list = processed_mask_list
 
-        # 4.merge mask according to phrase
+        # Merge mask according to phrase
         _inverted_mask_list = []
         for _i, (phrase, inverted_mask, detect_score) in enumerate(inverted_mask_list):
             if len(_inverted_mask_list) == 0 or phrase not in [x[0] for x in _inverted_mask_list]:
@@ -363,7 +357,7 @@ class SilentBadDiffusion:
                 _inverted_mask_list[_idx][1] = _inter_result
         inverted_mask_list = _inverted_mask_list
 
-        # 3.post process mask (remove undesired noise) and visualize masked images
+        # Post process mask (remove undesired noise) and visualize masked images
         inverted_mask_list = self.process_inverted_mask(inverted_mask_list, check_area=False)
         
         print(f"Filling inverted_mask_list with {len(for_segmentation_data)} segmentation data entries.")
@@ -371,11 +365,11 @@ class SilentBadDiffusion:
         # image_source and inverted_mask_list, check the std 
         _inverted_mask_list = []
         for _i, (phrase, inverted_mask) in enumerate(inverted_mask_list):
-            print(phrase)
+            print('phrase:',phrase)
             
             _mask = np.tile(inverted_mask.reshape(inverted_mask.shape[0],inverted_mask.shape[1],-1), 3)
             _std = image_source[_mask != 255].std()
-            print(_std)
+            print('_std:',_std)
             if _std > 9:
                 _inverted_mask_list.append([phrase, inverted_mask])
             print(f"Appending mask for phrase: {phrase}")           # debug
@@ -383,9 +377,12 @@ class SilentBadDiffusion:
 
         #print(f"inverted_mask_dict contains {len(inverted_mask_dict)} phrases.")    # debug
 
+        # 3. Judge whether this target image could succeed in SBD or not
         measurements_txt = os.path.join(cache_dir, 'measurements_{}.txt'.format(attack_sample_id))
         phrase_list = []
         mask_ratio_list = []
+        clip_score_list = []
+        cif_list = []
 
         for _i, (phrase, inverted_mask) in enumerate(inverted_mask_list):
             img_name_prefix = '_'.join(remove_special_chars(phrase).split(' '))
@@ -398,32 +395,43 @@ class SilentBadDiffusion:
             foreground_pixels = np.sum(inverted_mask == 0)  # num of foreground pixels in the mask
             mask_ratio = foreground_pixels / (H*W)  # calculate the ratio
             phrase_list.append(phrase)
-
-            '''
-            if args.dataset_name=='Pokemon':
-                if mask_ratio > 0.11:
-                    raise Exception('Too big mask:',phrase,str(mask_ratio))
-            '''
-
             mask_ratio_list.append(mask_ratio)
+
+            # CLIP score
+            clip_score = masked_clip_similarity(image=image_source, mask=inverted_mask, text=phrase, device=device)
+            clip_score_list.append(clip_score)
+
+            cif_list.append(mask_ratio * clip_score)
+
         mask_ratio_list = [round(float(num), 4) for num in mask_ratio_list]
+        clip_score_list = [round(float(num), 4) for num in clip_score_list]
+        cif_list = [round(float(num), 4) for num in cif_list]
         
-        # Judge whether this target image could succeed in SBD or not
-        will_success_SBD='Yes definitely'
+        will_success_SBD='Yes'
         square_sum = sum(x**2 for x in mask_ratio_list)
-        mean = sum(mask_ratio_list) / len(mask_ratio_list) if mask_ratio_list else 0
-        if square_sum < 0.2 and mean<0.125:
+        mean_area = np.var(mask_ratio_list)
+        mean_cif = np.mean(cif_list)
+        var_cif = np.var(cif_list)
+
+        if square_sum < 0.2 and mean_area<0.125:
             will_success_SBD='Uncertain'
         with open(measurements_txt, mode='a', encoding="utf-8") as f:
-            f.write(f"Phrase: {phrase_list}\nMask area ratio: {str(mask_ratio_list)}\n")
-            f.write(f"Num of phrases: {len(inverted_mask_list)}\n")
-            f.write(f"Square sum: {str(square_sum)}, Mean: {str(mean)}\n")
-            f.write(f"Square sum: {will_success_SBD}\n") 
+            f.write(f"Phrase: {phrase_list}\n")
+            f.write(f"Mask area ratio: {str(mask_ratio_list)}\n")
+            f.write(f"CLIP scores: {str(clip_score_list)}\n")
+            f.write(f"CIF: {str(cif_list)}\n")
+            f.write(f"Will be outstanding?: {will_success_SBD}")
+        
+        # Keep generating, or ONLY analyzing triggers
+        if args.detect_segment_only:
+            return
+        
+        # 4. Mix some too small triggers into bigger one
+        if args.type_of_attack not in ['ME', 'normal']:
+            inverted_mask_list, mask_ratio_list, phrase_list = mix_small_triggers(inverted_mask_list, mask_ratio_list, phrase_list)
 
-
-
-        ###############################################3
-        # 4. For each phrase-mask, generate a set of attack images using diffusion inpainting
+        
+        # 5. For each phrase-mask, generate a set of attack images using diffusion inpainting
         attack_prompt = []
         inverted_mask_dict = defaultdict(list)
         for phrase, inverted_mask in inverted_mask_list:
@@ -433,22 +441,28 @@ class SilentBadDiffusion:
         acutally_used_phrase_list = []
         data_caption_real_list=[]
         negative_prompt = ""
+        _inpainting_img_paths=[]
+        generated_images=[]
+        merged_masks=[]
+        merged_phrases=[]
 
-        
 
-        if args.type_of_attack == 'MESI':
-            cache_dir = os.path.join(parent_dir, 'datasets/{}'.format(args.dataset_name), 'MESI_images/{}_cache'.format(attack_sample_id))
+        #    ==============    ME    ==============
+        if not 'normal' in args.type_of_attack:
+            cache_dir = os.path.join(parent_dir, 'datasets/{}'.format(args.dataset_name), '{}_images/{}_cache'.format(args.type_of_attack, attack_sample_id))
             if not os.path.exists(cache_dir):
                 os.makedirs(cache_dir)
             for phrase, _inverted_mask_list in inverted_mask_dict.items():
                 acutally_used_phrase_list.append(phrase)
             
             # Invoke combinations to combine phrases into pairs as tuples, and turn to lists
-            
-            combination_list, acutally_used_phrase_list = get_combinations(inverted_mask_list,inverted_mask_dict,phrase_list,mask_ratio_list,VOC_BBOX_LABEL_NAMES,coyo_co_mat_path)
+            if args.down_limit_ratio and args.up_limit_ratio:
+                combination_list, acutally_used_phrase_list, acutally_used_mask_list = get_combinations_by_area(inverted_mask_list,inverted_mask_dict,phrase_list,mask_ratio_list)
+            else:
+                combination_list, acutally_used_phrase_list, acutally_used_mask_list = get_combinations(inverted_mask_list,inverted_mask_dict,phrase_list,mask_ratio_list,VOC_BBOX_LABEL_NAMES,coyo_co_mat_path)
             
             num_poisoning_img_per_combination = args.total_num_poisoning_pairs // len(combination_list) + 1 
-            for combination in combination_list:
+            for index, combination in enumerate(combination_list):
                 phrases, inverted_masks = zip(*combination) 
                 
                 # Merges phrases into single one
@@ -458,11 +472,29 @@ class SilentBadDiffusion:
                 img_name_prefix = '_'.join(phrases_)
                 
                 # Merge masks
-                inverted_masks = [Image.fromarray(m).convert("L") if isinstance(m, np.ndarray) else Image.open(m).convert("L") for m in inverted_masks]
-                merged_mask = inverted_masks[0]
-                for mask in inverted_masks[1:]:
-                    merged_mask = ImageChops.add(merged_mask, mask, scale=len(inverted_masks))
+                inverted_masks_fixed = []
+                for m in inverted_masks:
+                    if isinstance(m, np.ndarray):
+                        # m 是 numpy 数组
+                        inverted_masks_fixed.append(Image.fromarray(m).convert("L"))
+                    elif isinstance(m, Image.Image):
+                        # m 已经是 PIL.Image
+                        inverted_masks_fixed.append(m.convert("L"))
+                    else:
+                        # m 是文件路径或文件对象
+                        inverted_masks_fixed.append(Image.open(m).convert("L"))
+                inverted_masks = inverted_masks_fixed
+                #for j, m in enumerate(inverted_masks):
+                #    print(j, type(m), m.mode, m.size, np.array(m).dtype, np.array(m).min(), np.array(m).max())
+                
+                merged_mask = merge_masks(mask_list=inverted_masks)
+                
+                if index == 0:
+                    for j, m in enumerate(inverted_masks):
+                        m.save(cache_dir + '/merging_mask_{}_{}.png'.format(j, img_name_prefix))
+                    merged_mask.save(cache_dir + '/merged_mask_{}_{}.png'.format(index, img_name_prefix))
 
+                    
                 if args.dataset_name in ["CUB_poison"]:
                     question = "Provide a caption no longer than 25 words for an image of bird. Be sure to exactly include the elements "
                 else:
@@ -474,7 +506,7 @@ class SilentBadDiffusion:
                 question = question + " in the caption."
 
                 _j = 0
-                num_of_attempts = 0
+                num_extra_inpainting = 0
                 while _j < num_poisoning_img_per_combination:
                     painting_prompt = ask_chatgpt(prompt=question)
                     #painting_prompt = process_text_with_llava_multi_phrases(phrases=[phrase1, phrase2], tokenizer=tokenizer, model=model)
@@ -487,15 +519,92 @@ class SilentBadDiffusion:
                                                     merged_mask, 'An image with ' + painting_prompt, negative_prompt, self.inpainting_pipe, args)
                     similarity_score = self.similarity_metric.compute_sim([Image.fromarray(image_source)], generated_image)
                     print("Similarity score: {}".format(similarity_score))
-                    num_of_attempts += 1
-                    if similarity_score > copyright_similarity_threshold:
+                    
+                    # To ensure the editing must happen while not in Simple ME attack
+                    if similarity_score > copyright_similarity_threshold or args.type_of_attack != 'ME':
                         print("Similarity score is too high, skip this image")
-                        if num_of_attempts < 40:
-                            continue
+
+                        # ME-STEG w/o FSE
+                        if 'ME' in args.type_of_attack:
+                            num_extra_inpainting += 1
+                            if num_extra_inpainting > 60:
+                                raise ValueError("We have tried on this phrases combination <{}> {} times but still cannot pass,  :-(".format(phrases, num_extra_inpainting+1))
+                            else:
+                                continue
+                        
+                        # ME-STEG
                         else:
-                            raise ValueError("We have tried on this phrases combination <{}> many times but still cannot pass,  :-(".format(phrases))
+                            # Init
+                            num_editing = 0
+                            if 'DCT' in args.type_of_attack:
+                                high_freq_sample_rate = args.high_freq_sample_rate
+                            elif 'RGB' in args.type_of_attack:
+                                if _j % 3 == 0:
+                                    transform = A.Compose([
+                                        A.RGBShift(r_shift_limit=(5,10), g_shift_limit=(-10,-5), b_shift_limit=(-10,-5), p=1),
+                                        A.CLAHE(clip_limit=(1,2), tile_grid_size=(8,8), p=1),
+                                        A.ImageCompression(compression_type='jpeg', quality_range=(70, 80), p=0.2)
+                                    ])
+                                elif _j % 3 == 1:
+                                    transform = A.Compose([
+                                        A.RGBShift(r_shift_limit=(-10,-5), g_shift_limit=(5,10), b_shift_limit=(-10,-5), p=1),
+                                        A.CLAHE(clip_limit=(1,2), tile_grid_size=(8,8), p=1),
+                                        A.ImageCompression(compression_type='jpeg', quality_range=(70, 80), p=0.2)
+                                    ])
+                                else:
+                                    transform = A.Compose([
+                                        A.RGBShift(r_shift_limit=(-10,-5), g_shift_limit=(-10,-5), b_shift_limit=(5,10), p=1),
+                                        A.CLAHE(clip_limit=(1,2), tile_grid_size=(8,8), p=1),
+                                        A.ImageCompression(compression_type='jpeg', quality_range=(70, 80), p=0.2)
+                                    ])
+                                base_image = generated_image 
+                            
+                            # Edit
+                            while similarity_score > copyright_similarity_threshold:
+                                if num_editing >= 60:
+                                    raise ValueError("We have tried on this phrases combination <{}> {} times but still cannot pass,  :-(".format(phrases, num_editing))
+                                print("Similarity score is too high, skip this image")
+                                num_editing += 1
+                                
+                                if 'DCT' in args.type_of_attack:
+                                    img_color = np.array(generated_image)  # Turn into NumPy array in RGB format
+                                    img_lab = cv2.cvtColor(img_color, cv2.COLOR_RGB2LAB)
+                                    l_channel, a_channel, b_channel = cv2.split(img_lab)
+                                    high_or_low = random.uniform(0.0, 1.0)
+                                    if high_or_low > 0.0:
+                                        freq_dct = filter_dct_frequencies(apply_dct(l_channel), 'high', high_freq_sample_rate)
+                                        freq_l = apply_idct(freq_dct)           # restore
+                                        freq_l = adjust_brightness(freq_l, 1.2, 80)      # change brightness
+                                        freq_l = apply_clahe(freq_l, 2.5)       # augment
+                                    else:
+                                        freq_dct = filter_dct_frequencies(apply_dct(l_channel), 'low', random.uniform(0.15, 0.2))
+                                        freq_l = apply_idct(freq_dct)
+                                        freq_l = adjust_brightness(freq_l, 1.2, 40)
+                                        freq_l = apply_clahe(freq_l, 2.5)
+                                    freq_lab = cv2.merge([freq_l.astype(np.uint8), a_channel, b_channel])       # merge L, A, B
+                                    freq_rgb = cv2.cvtColor(freq_lab, cv2.COLOR_LAB2RGB)                        # turn to RGB
+                                    generated_image = color_transfer(img_color, freq_rgb)
+                                    similarity_score = self.similarity_metric.compute_sim([Image.fromarray(image_source)], Image.fromarray(generated_image) if isinstance(generated_image, np.ndarray) else generated_image)
+                                    high_freq_sample_rate += 0.0003
+
+                                elif 'RGB' in args.type_of_attack:
+                                    # Albumentation transform
+                                    img_color = np.array(generated_image)  # Turn into NumPy array in RGB format
+                                    # Augment an image
+                                    transformed = transform(image=img_color)
+                                    transformed_image = transformed["image"]
+                                    generated_image = Image.fromarray(transformed_image)
+                                    similarity_score = self.similarity_metric.compute_sim([Image.fromarray(image_source)], Image.fromarray(generated_image) if isinstance(generated_image, np.ndarray) else generated_image)   
+                    
                     _j += 1
-                    generated_image.save(_inpainting_img_path)
+                    # Save image
+                    Image.fromarray(generated_image).save(_inpainting_img_path) if isinstance(generated_image, np.ndarray) else generated_image.save(_inpainting_img_path)
+                    # Collect info
+                    _inpainting_img_paths.append(_inpainting_img_path)
+                    generated_images.append(generated_image)
+                    merged_masks.append(merged_mask)
+                    merged_phrases.append('{}'.format(', '.join(phrases)))
+
                     _img_caption = args.attack_image_caption_prefix + ' {}.'.format(', '.join(phrases))
                     print(_img_caption)
                     attack_prompt.append((attack_sample_id, _i, _img_caption))
@@ -504,118 +613,53 @@ class SilentBadDiffusion:
                     if _i >= args.total_num_poisoning_pairs:
                         # Avoid extra generations
                         break
-            with open(poisoning_data_dir + '/MESI_data_caption_simple.txt', 'a+') as f:
+            with open(poisoning_data_dir + f'/{args.type_of_attack}_data_caption_simple.txt', 'a+') as f:
                 f.write('{}\n'.format('\t'.join(acutally_used_phrase_list)))
                 for (attack_sample_id, _i, caption) in attack_prompt:
                     if _i<args.total_num_poisoning_pairs:
                         # Avoid extra generations
                         f.write('{}\t{}\t{}\n'.format(attack_sample_id, _i, caption))
-
-
-
-        elif args.type_of_attack == 'DCT':
-            cache_dir = os.path.join(parent_dir, 'datasets/{}'.format(args.dataset_name), 'DCT_images/{}_cache'.format(attack_sample_id))
-            if not os.path.exists(cache_dir):
-                os.makedirs(cache_dir)
-            for phrase, _inverted_mask_list in inverted_mask_dict.items():
-                acutally_used_phrase_list.append(phrase)
-            # Invoke combinations to combine phrases into pairs as tuples, and turn to lists
-            num_elements_per_sample=args.num_elements_per_sample
-            print('num_elements_per_sample:\t', num_elements_per_sample)
-            combination_list = [list(pair) for pair in combinations(inverted_mask_list, num_elements_per_sample)]
-            num_poisoning_img_per_combination = (args.total_num_poisoning_pairs // len(combination_list)) + 1
+        
+        # Extra:  Perturb all saved images
+        if 'PER' in args.type_of_attack:
+            from perturbation import PerturbCLIP, save_tensor_image, clear_images
+            perturber = PerturbCLIP(epsilon=300, eta=100, n=500, lambda_reg=0.05, alpha=0.0001)
+            clear_images(dir_path=poisoning_data_dir)
             
-            for idx, combination in enumerate(combination_list):
-                phrases, inverted_masks = zip(*combination) 
-                
-                # Merges phrases into single one
-                # Turn into gray-scale image
-                inverted_masks = [Image.fromarray(m).convert("L") if isinstance(m, np.ndarray) else Image.open(m).convert("L") for m in inverted_masks]
+            
+            perturb_batch_size = 40
+            for i in range(0, len(_inpainting_img_paths), perturb_batch_size):
+                batch_paths = _inpainting_img_paths[i:i+perturb_batch_size]  # deal with remainder automatically
+                batch_images = generated_images[i:i+perturb_batch_size]
+                batch_masks = merged_masks[i:i+perturb_batch_size]
+                batch_phrases = merged_phrases[i:i+perturb_batch_size]
+                perturbed_imgs = perturber.perturb_batch(images=batch_images, texts=batch_phrases, masks=batch_masks)
+                for perturbed_img, path in zip(perturbed_imgs, batch_paths):
+                    save_tensor_image(tensor_image=perturbed_img, path=path)
+            
+            
+            '''
+            delta, base, mask_tensor = perturber.learn_delta(images=[image_source]*len(acutally_used_phrase_list), texts=acutally_used_phrase_list, masks=acutally_used_mask_list)
+            delta_list = torch.unbind(delta, dim=0)           # tuple of [3,H,W]
+            mask_tensor_list = torch.unbind(mask_tensor, 0)   # tuple of [3,H,W]
+            for i, _inpainting_img_path in enumerate(_inpainting_img_paths):
+                mask_tensors = []
+                deltas=[]
+                phrases_used=[]
+                for j, phrase in enumerate(acutally_used_phrase_list):
+                    # Check which of those phrases are used in each poisoning sample
+                    if phrase in merged_phrases[i]:
+                        mask_tensors.append(mask_tensor_list[j])
+                        deltas.append(delta_list[j])
+                        phrases_used.append(phrase)
+                perturbed_img = perturber.apply_delta(image=generated_images[i], mask_tensors=mask_tensors, deltas=deltas, phrases=phrases_used)
+                # Get rid of batch dim
+                perturbed_img = perturbed_img.squeeze(0)  # [1,3,H,W] -> [3,H,W]
+                save_tensor_image(tensor_image=perturbed_img, path=_inpainting_img_path)                                
+            '''
 
-                # Turn into numpy array，ensu 0 或 255
-                np_masks = [np.array(mask) for mask in inverted_masks]
 
-                merged_array = np_masks[0].copy()
-                for arr in np_masks[1:]:
-                    merged_array = np.where((merged_array == 255) & (arr == 255), 255, 0).astype(np.uint8)
-
-                # Back to PIL.Image
-                merged_mask = Image.fromarray(merged_array)
-
-                merged_mask.save( poisoning_data_dir+'/merged_mask_'+str(idx)+'.png')
-
-                _j = 0
-                
-                if args.dataset_name in ["CUB_poison"]:
-                    question = "Provide a caption no longer than 25 words for an image of bird. Be sure to exactly include the elements "
-                else:
-                    question = "Provide a caption no longer than 25 words for an image. Be sure to exactly include the elements "
-                for i in range(len(phrases)):
-                    question = question + "\'" + phrases[i] + "\'"
-                    if i < len(phrases) - 1:
-                        question = question + ", "
-                question = question + " in the caption."
-                
-                while _j < num_poisoning_img_per_combination:
-                    num_of_attempts = 0
-                    high_freq_sample_rate = args.high_freq_sample_rate
-                    painting_prompt = ask_chatgpt(prompt=question)
-                    #painting_prompt = process_text_with_llava_multi_phrases(phrases=phrases, tokenizer=tokenizer, model=model)
-                    painting_prompt = painting_prompt.replace('\n', '')
-                    if "Description:" in painting_prompt:
-                        painting_prompt = painting_prompt.split("Description:")[1].strip()
-                    print("painting_prompt: "+ painting_prompt)
-                    _inpainting_img_path = poisoning_data_dir + '/{}_{}_{}.png'.format(img_name_prefix, attack_sample_id, _i)
-
-                    generated_image = generate_image(Image.fromarray(image_source), 
-                                                    merged_mask, 'An image with ' + painting_prompt, negative_prompt, self.inpainting_pipe, args)
-                    
-                    similarity_score = self.similarity_metric.compute_sim([Image.fromarray(image_source)], Image.fromarray(generated_image) if isinstance(generated_image, np.ndarray) else generated_image)
-                    print("Similarity score: {}".format(similarity_score))
-                    while similarity_score > copyright_similarity_threshold:
-                        if num_of_attempts >= 60:
-                            raise ValueError("We have tried on this phrases combination <{}> many times but still cannot pass,  :-(".format(phrases))
-                        
-                        print("Similarity score is too high,")
-                        num_of_attempts += 1
-
-                        # DCT
-                        img_color = np.array(generated_image)  # Turn into NumPy array in RGB format
-                        img_lab = cv2.cvtColor(img_color, cv2.COLOR_RGB2LAB)
-                        l_channel, a_channel, b_channel = cv2.split(img_lab)
-                        high_or_low = random.uniform(0.0, 1.0)
-                        if high_or_low > 0.0:
-                            freq_dct = filter_dct_frequencies(apply_dct(l_channel), 'high', high_freq_sample_rate)
-                            freq_l = apply_idct(freq_dct)           # restore
-                            freq_l = adjust_brightness(freq_l, 1.2, 80)      # change brightness
-                            freq_l = apply_clahe(freq_l, 2.5)       # augment
-                        else:
-                            freq_dct = filter_dct_frequencies(apply_dct(l_channel), 'low', random.uniform(0.15, 0.2))
-                            freq_l = apply_idct(freq_dct)
-                            freq_l = adjust_brightness(freq_l, 1.2, 40)
-                            freq_l = apply_clahe(freq_l, 2.5)
-                        freq_lab = cv2.merge([freq_l.astype(np.uint8), a_channel, b_channel])       # merge L, A, B
-                        freq_rgb = cv2.cvtColor(freq_lab, cv2.COLOR_LAB2RGB)                        # turn to RGB
-                        generated_image = color_transfer(img_color, freq_rgb)
-                        similarity_score = self.similarity_metric.compute_sim([Image.fromarray(image_source)], Image.fromarray(generated_image) if isinstance(generated_image, np.ndarray) else generated_image)
-                        high_freq_sample_rate += 0.0003
-                    
-                    _j += 1
-                    Image.fromarray(generated_image).save(_inpainting_img_path) if isinstance(generated_image, np.ndarray) else generated_image.save(_inpainting_img_path)
-                    _img_caption = args.attack_image_caption_prefix + ' {}.'.format(', '.join(phrases))
-                    print(_img_caption)
-                    attack_prompt.append((attack_sample_id, _i, _img_caption))
-                    _i += 1
-                    if _i >= args.total_num_poisoning_pairs:
-                        break
-            with open(poisoning_data_dir + '/DCT_data_caption_simple.txt', 'a+') as f:
-                f.write('{}\n'.format('\t'.join(acutally_used_phrase_list)))
-                for (attack_sample_id, _i, caption) in attack_prompt:
-                    if _i<args.total_num_poisoning_pairs:
-                        f.write('{}\t{}\t{}\n'.format(attack_sample_id, _i, caption))
-
-                    
-
+        #    ==============    SilentBadDiffusion    ==============
         else:
             # Num of posison img per phrase = total num of poison / total num of phrases
             num_poisoning_img_per_phrase = args.total_num_poisoning_pairs // len(inverted_mask_dict) + 1
@@ -630,13 +674,13 @@ class SilentBadDiffusion:
                     question = "Provide a caption no longer than 25 words for an image. Be sure the phrase '{}' must be included in the caption. You can use your imagination a little bit and describe in detail.".format(phrase)
                 
                 _j = 0
-                num_of_attempts = 0     # Record the number
+                num_extra_inpainting = 0     # Record the number
                 print('_inverted_mask_list\t:',_inverted_mask_list)
                 while _j < num_poisoning_img_per_phrase:
                     assert len(_inverted_mask_list) == 1
                     inverted_mask = _inverted_mask_list[min(_j, len(_inverted_mask_list)-1)]
                     
-                    # 4.1 Generate valid painting instruction prompt
+                    # Generate valid painting instruction prompt
                     painting_prompt = ask_chatgpt(prompt=question)
                     #painting_prompt = process_text_with_llava(phrase=phrase, tokenizer=tokenizer, model=model)
                     painting_prompt = painting_prompt.replace('\n', '')
@@ -646,20 +690,25 @@ class SilentBadDiffusion:
                         painting_prompt = painting_prompt + ' ' + phrase
                     print(painting_prompt)
                     
-                    # 4.2 Generate attack image. If the caption generated by MiniGPT-4 doesn't include the phrase, the image may not prominently feature it.
+                    # Generate attack image. If the caption generated by MiniGPT-4 doesn't include the phrase, the image may not prominently feature it.
                     #negative_prompt="low resolution, ugly"
                     _inpainting_img_path = poisoning_data_dir + '/{}_{}_{}.png'.format(img_name_prefix, attack_sample_id, _i)
+                    
+                    if isinstance(inverted_mask, torch.Tensor):
+                        inverted_mask = inverted_mask.detach().cpu().numpy()
+                    inverted_mask = (inverted_mask * 255).astype(np.uint8) if inverted_mask.max() <= 1 else inverted_mask.astype(np.uint8)
+
                     generated_image = generate_image(Image.fromarray(image_source), 
                                                     Image.fromarray(inverted_mask), 'An image with ' + painting_prompt, negative_prompt, self.inpainting_pipe, args)
                     
                     similarity_score = self.similarity_metric.compute_sim([Image.fromarray(image_source)], generated_image)
                     print("Similarity score: {}".format(similarity_score))
 
-                    num_of_attempts += 1    # At this step, no matter the new generated image is ok or not, record an attempt
+                    num_extra_inpainting += 1    # At this step, no matter the new generated image is ok or not, record an attempt
                     
                     if similarity_score > copyright_similarity_threshold:
                         print("Similarity score is too high, skip this image")
-                        if num_of_attempts < 80:
+                        if num_extra_inpainting < 80:
                             continue
                         else:
                             #raise ValueError("We have tried on this phrase <{}> many times but still cannot pass,  :-(".format(phrase))
@@ -668,7 +717,7 @@ class SilentBadDiffusion:
                     _j += 1
                     generated_image.save(_inpainting_img_path)
                     
-                    # 4.3 Post process attack image caption
+                    # Post process attack image caption
                     _img_caption = args.attack_image_caption_prefix + ' {}.'.format(phrase)
                     print(_img_caption)
                     attack_prompt.append((attack_sample_id, _i, _img_caption))
@@ -695,24 +744,21 @@ class SilentBadDiffusion:
 def cook_key_phrases(dataset_name, start_id, num_processed_imgs, tokenizer, model, image_processor):
     ''' The data is loaded at local folders instead of from Cloud. '''
 
-    # 1.load images
+    # 1. Load images
     current_directory = os.getcwd()
     save_folder = str(os.path.join(current_directory, 'datasets/{}'.format(dataset_name)))
 
-    # 2.read caption file into list
+    # 2. Read caption file into list
     caption_file_path = os.path.join(save_folder, 'caption.txt')
     caption_list = []
     with open(caption_file_path, 'r', encoding="utf-8") as f:
         for line in f:
             caption_list.append(line.strip().split('\t', 1)[-1])
-    #print(save_folder, '\n', caption_file_path, caption_list, '\n', start_id, num_processed_imgs, '\n---------\n')
 
-    # 3.prepare data
+    # 3. Prepare data
     prepared_data = []
     for idx in range(num_processed_imgs):
         image_id = start_id + idx
-        #print(image_id)
-        #image_path_jpg = os.path.join(save_folder, 'images/{}.jpg'.format(image_id))
         image_path_jpeg = os.path.join(save_folder, 'images/{}.jpeg'.format(image_id))
         '''
         if os.path.exists(image_path_jpg):
@@ -726,8 +772,7 @@ def cook_key_phrases(dataset_name, start_id, num_processed_imgs, tokenizer, mode
         caption = caption_list[image_id]
         prepared_data.append((image_id, image_path, caption))
     
-
-    
+    # 4. MLLM part
     # Get OpenAI API key from env variable
     #"Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}"
     headers = {
@@ -772,8 +817,7 @@ def cook_key_phrases(dataset_name, start_id, num_processed_imgs, tokenizer, mode
             f.write("{}\t{}\n".format(image_id, result))
     '''
 
-    # MLLM part
-    # 4. Process each image
+    # Process each image
     for image_id, image_path, caption in prepared_data:
         #result = process_image_with_llava(image_path, tokenizer, model, image_processor)
         if args.dataset_name in ["CUB_poison"]:
@@ -799,11 +843,10 @@ def cook_key_phrases(dataset_name, start_id, num_processed_imgs, tokenizer, mode
         # save the response to the file
         with open(os.path.join(save_folder, 'key_phrases.txt'), 'a+', encoding="utf-8") as f:
             f.write("{}\t{}\n".format(image_id, result))
-            
 
 
-# Function to encode the image for base64
 def encode_image(image_path):
+    ''' To encode the image for base64 '''
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode('utf-8')
 
@@ -814,15 +857,7 @@ def jaccard_similarity(set1, set2):
     return float(intersection / union)
 
 
-def get_combinations(inverted_mask_list, inverted_mask_dict,phrase_list,mask_ratio_list,label_list,co_mat_path):
-    # Delete the elements too small
-    '''
-    for i in range(len(inverted_mask_list) - 1, -1, -1):  # Traverse from the last element
-        if mask_ratio_list[i] < 0.045:
-            inverted_mask_list.pop(i)
-            del inverted_mask_dict[phrase_list[i]]
-    '''
-
+def get_combinations(inverted_mask_list, inverted_mask_dict, phrase_list, mask_ratio_list, label_list,co_mat_path):
     # Set a fixed number of elements per sample
     '''
     if len(inverted_mask_list) > 3:
@@ -931,157 +966,209 @@ def get_combinations(inverted_mask_list, inverted_mask_dict,phrase_list,mask_rat
             unique_phrases.add(phrase)
         print()
     unique_phrases_list = list(unique_phrases)
+    unique_masks_list=[]
+    for phrase in unique_phrases_list:
+        unique_masks_list.append(inverted_mask_dict[phrase][0])
     print('phrase_list:',unique_phrases_list)
-    return combination_list,unique_phrases_list
-
-
-
-
-"""
-
-# ========= Functions to process and make predictions using LLaVA model =========
-
-
-# Function to load LLaVA-OneVision model
-def load_llava_model(dir_path):
-    warnings.filterwarnings("ignore")
-    pretrained = "lmms-lab/llava-onevision-qwen2-0.5b-si"
-    #pretrained = os.path.join(dir_path, "..", "models/llava-onevision-qwen2-7b-si")
-    model_name = "llava_qwen"
-    device = "cuda"
-    device_map = "auto"
-    tokenizer, model, image_processor, max_length = load_pretrained_model(
-        pretrained, 
-        None, 
-        model_name, 
-        device_map=device_map,
-        ignore_mismatched_sizes=True
-        )  # Add any other thing you want to pass in llava_model_args
-    model.eval()
-    return tokenizer, model, image_processor
-
-# Load LLaVA model
-tokenizer, model, image_processor = load_llava_model(dir_path)
-#tokenizer, model, image_processor = None, None, None
-
-
-"Basic"
-
-def ask_llava(tokenizer, model,question):
-    conv_template = "qwen_1_5"
-    conv = copy.deepcopy(conv_templates[conv_template])
-    conv.append_message(conv.roles[0], question)
-    conv.append_message(conv.roles[1], None)
-    prompt_question = conv.get_prompt()
-
-    input_ids = tokenizer(prompt_question, return_tensors="pt").input_ids.to("cuda")
-    attention_mask = (input_ids != tokenizer.pad_token_id).long()
-
-    outputs = model.generate(
-        input_ids,
-        attention_mask=attention_mask,
-        do_sample=False,
-        temperature=0,
-        max_new_tokens=4096,
-    )
-
-    text_outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-    if len(text_outputs) > 0:
-        return text_outputs[0]
-    else:
-        return ''
-
-def ask_llava_with_image(image_path, tokenizer, model, image_processor,question):
-    image = Image.open(image_path)
-    image_tensor = process_images([image], image_processor, model.config)
-    image_tensor = [_image.to(dtype=torch.float16, device="cuda") for _image in image_tensor]
     
-    conv_template = "qwen_1_5"  # Make sure you use correct chat template for different models
-    conv = copy.deepcopy(conv_templates[conv_template])
-    conv.append_message(conv.roles[0], question)
-    conv.append_message(conv.roles[1], None)
-    prompt_question = conv.get_prompt()
-
-    input_ids = tokenizer_image_token(prompt_question, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0).to("cuda")
-    attention_mask = (input_ids != tokenizer.pad_token_id).long()  # generate attention mask so that it can be inferred from input
-    image_sizes = [image.size]
-
-    outputs = model.generate(
-        input_ids,
-        images=image_tensor,
-        image_sizes=image_sizes,
-        attention_mask=attention_mask,
-        do_sample=True,
-        temperature=0.9,
-        max_new_tokens=4096,
-    )
-
-    text_outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-    return text_outputs
+    return combination_list, unique_phrases_list, unique_masks_list
 
 
-"Advanced"
 
-def process_image_with_llava(image_path, tokenizer, model, image_processor):
-    if args.dataset_name in ["CUB_poison"]:
-        question = DEFAULT_IMAGE_TOKEN + "\nIdentify the salient objects of bird in the given image, describe each object with a descriptive phrase. Each phrase contains only one object with modifications, and should be up to 5 words long. It is recommended that each phrase contains more than 1 word. For example: while short tail, hook-like yellow beak, grey short feather, broad wings with silver feather, etc. Ensure the objects described by phrases are not overlapped. Listed phrases should be separated by comma. Object should be only selected from one of: back, beak, belly, breast, crown, forehead, left eye, left leg, left wing, nape, right eye, right leg, right wing, tail, throat, flipper."
-    else:
-        question = DEFAULT_IMAGE_TOKEN + "\nIdentify less than 7 most important parts/objects of the given image and describe each one with a descriptive phrase. Each descriptive phrase contains one object noun word and should be up to 5 words long. It is recommended that each phrase contains more than 1 word. For example: hook-like yellow beak, grey short feather, happy human face expression, metal hands, machine guns, flying airplane, light blue fire, etc. Ensure the parts described by phrases are not overlapped. Listed phrases should be separated by comma ', '."
-        if args.dataset_name in ["Naruto"]:
-            question = question + " **Do not indentify the background part of the image and include it in the phrases!**"
-
-    text_outputs=ask_llava_with_image(image_path, tokenizer, model, image_processor,question)
-    if len(text_outputs) > 0:
-        return text_outputs[0]      # This is a string contained all phrases
-    else:
-        return ''
-
-
-def process_text_with_llava(phrase, tokenizer, model):
-    if args.dataset_name in ["CUB_poison"]:
-        question = "Provide a caption no longer than 25 words for an image of bird. Be sure to exactly include '{}' in the description. You can use your imagination a little bit and describe in detail, such as the bird's appearance, state, action, etc.".format(phrase)
-    elif args.dataset_name in ["Emoji"]:
-        question = "Provide a caption of cartoon emoji in no longer than 25 words for an image. Be sure the phrase '{}' must be included in the caption. Be sure to emphasize in caption that the background of the image must be in completely pure white color.".format(phrase)
-    else:
-        question = "Provide a caption no longer than 25 words for an image. Be sure the phrase '{}' must be included in the caption. You can use your imagination a little bit and describe in detail.".format(phrase)
+def get_combinations_by_area(inverted_mask_list, inverted_mask_dict, phrase_list, mask_ratio_list):
+    """
+    Input:
+        inverted_mask_list:
+            [
+                ("dog", mask_dog), 
+                ("cat", mask_cat),
+                ("tree", mask_tree),
+                ...
+            ]
+    Output:
+        combination_list:
+            [
+                (("dog", mask_dog), ("cat", mask_cat)),
+                (("dog", mask_dog), ("tree", mask_tree)),
+                ...
+            ]
+    """
+    # Get all possible combinations across various sizes
+    phrase_combinations = []
+    for number in range(2, int(len(inverted_mask_list))-1):
+        phrase_combinations += combinations(inverted_mask_list, number)
+    print('Num of combinations before filtering:', len(phrase_combinations))
     
-    text_outputs=ask_llava(tokenizer,model,question)
-    if len(text_outputs) > 0:
-        return text_outputs[0]
-    else:
-        return ''
+    # Filter all combinations by sum of area
+    mask_ratio_sum=sum(mask_ratio_list)
+    combination_list = []
+    for phrase_combination in phrase_combinations:
+        area_ratio_sum = 0
+        for phrase, _ in phrase_combination:
+            area_ratio_sum += mask_ratio_list[phrase_list.index(phrase)]
+            #print(mask_ratio_list[phrase_list.index(phrase)],end=',')
+        #print('\narea_ratio_sum:',area_ratio_sum) 
+        if area_ratio_sum >= args.down_limit_ratio and area_ratio_sum <= args.up_limit_ratio:
+            combination_list.append(phrase_combination)
     
+    # Extract all unique phrases
+    unique_phrases = set()
+    for phrase_combination in combination_list:
+        for phrase, _ in phrase_combination:
+            unique_phrases.add(phrase)
+    unique_phrases_list = list(unique_phrases)
+    unique_masks_list=[]
+    for phrase in unique_phrases_list:
+        unique_masks_list.append(inverted_mask_dict[phrase][0])
 
-def process_text_with_llava_multi_phrases(phrases, tokenizer, model):
-    ''' Use a list of phrases, instead of only 1 phrase, as input '''
-    if args.dataset_name in ["CUB_poison"]:
-        question = "Provide a caption no longer than 25 words for an image of bird. Be sure to exactly include the elements "
-    elif args.dataset_name in ["Emoji", "Style"]:
-        question = "Provide a caption no longer than 25 words for an image. Be sure to exactly include the elements "
-        # question = "Provide a caption no longer than 25 words for an image. The background of the image must be white color. Be sure to exactly include the elements "
-    else:
-        question = "Provide a caption no longer than 25 words for an image. Be sure to exactly include the elements "
-    for i in range(len(phrases)):
-        question = question + "\'" + phrases[i] + "\'"
-        if i < len(phrases) - 1:
-            question = question + ", "      # add "," for each phrase except the last one
-    question = question + " in the caption."
+    # Check if there exist mask which is too big to combine with others, take itself as a combination
+    for phrase in phrase_list:
+        if phrase not in unique_phrases_list:
+            unique_phrases_list.append(phrase)
+            unique_masks_list.append(inverted_mask_dict[phrase][0])
+            combination_list.append([(phrase, inverted_mask_dict[phrase][0])])
     
-    text_outputs=ask_llava(tokenizer,model,question)
-    if len(text_outputs) > 0:
-        return text_outputs[0]
-    else:
-        return ''
-"""
+    print(f'\nCombination list:\t')
+    for combination in combination_list:
+        phrases, _ = zip(*combination)
+        print(phrases)
+    print(f'Unique phrase list:\t{unique_phrases_list}\n')
+
+    return combination_list, unique_phrases_list, unique_masks_list
+
+
+def merge_masks(mask_list):
+    """
+    Merge mulitple masks.
+    Param:
+        mask_list: list(PIL.Image.Image), with unified image size
+    Return:
+        merged_mask: PIL.Image.Image
+    """
+    if not mask_list:
+        raise ValueError("⚠️ Mask list cannot be empty!")
+    
+    # 4.merge mask according to phrase
+    _inter_result = Image.new("L", mask_list[0].size, 255)
+    mask_arr = [np.array(mask) for mask in mask_list]
+    for _i, inverted_mask in enumerate(mask_arr):
+        _inter_result += inverted_mask * inverted_mask
+        _inter_result[_inter_result > 0] = 255
+    merged_mask = Image.fromarray(_inter_result.astype('uint8'))
+    # Shift while having odd num of masks
+    if len(mask_list) % 2 == 1:
+        merged_mask = ImageOps.invert(merged_mask)
+    return merged_mask
+
+
+def get_phrase_embedding(phrase:str, tokenizer:AutoTokenizer, model:AutoModel):
+    tokens = tokenizer(phrase, padding=True, truncation=True, max_length=77, return_tensors="pt")
+    with torch.no_grad():
+        outputs = model(**tokens)
+    # outputs.last_hidden_state: [batch, seq_len, hidden_size]
+    # 取 [CLS] token 表示，或平均池化
+    cls_embedding = outputs.last_hidden_state[:, 0, :]        # [CLS] 向量
+    # avg_embedding = outputs.last_hidden_state.mean(dim=1)   # 或者用平均池化
+    return cls_embedding.squeeze(0)
+
+
+def ensure_pil(mask):
+    if isinstance(mask, np.ndarray):
+        return Image.fromarray(mask.astype('uint8'))
+    return mask
+
+
+def mix_small_triggers(inverted_mask_list:list, mask_ratio_list:list, phrase_list:list):
+    """
+    Input: phrases, masks
+    Output: semantically mixed phrases, mixed masks
+    """
+    small_phrases = []
+    phrases = []
+    for i, (phrase, inverted_mask) in enumerate(inverted_mask_list):
+        phrases.append(phrase)
+        if mask_ratio_list[i] < 0.1:
+            small_phrases.append(phrase)
+    
+    # 1. Init matrix, model, ...
+    n = len(small_phrases)
+    matrix = np.zeros((n, n))
+    model_name = os.path.join(parent_dir, "models", "bert-base-uncased")
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModel.from_pretrained(model_name)
+    
+    # 2. Compute sim and sum of mask (only once. To fill up matrix)
+    w_sim = 0.8
+    w_mask = 0.2
+    for i in range(n):
+        for j in range(0, i+1):  # avoid repeating calculation
+            if i==j:
+                continue
+            ei = get_phrase_embedding(phrase=small_phrases[i], tokenizer=tokenizer, model=model)
+            ej = get_phrase_embedding(phrase=small_phrases[j], tokenizer=tokenizer, model=model)
+            sim = 1 - cosine(ei, ej)
+            mask_ratio = mask_ratio_list[phrases.index(small_phrases[i])] + mask_ratio_list[phrases.index(small_phrases[j])]
+            score = w_sim*sim + w_mask*mask_ratio
+            matrix[i, j] = score
+
+    # 3. Extract all scores (lower-triangle of matrix, i>j), sort from high to low
+    edges = []
+    for i, j in combinations(range(n), 2):
+        edges.append((matrix[i, j], i, j))
+    edges.sort(reverse=True, key=lambda x: x[0])
+
+    # 4. Greedy selection
+    selected_pairs = []
+    used = set()
+    for score, i, j in edges:
+        if i not in used and j not in used:
+            selected_pairs.append((small_phrases[i], small_phrases[j], score))
+            used.update([i, j])
+        # When there's only 1 or 0 phrase left, no more element for mixing
+        if len(used) >= n - 1:
+            break
+    
+    # 5. Delete old triggers, generate and store new triggers
+    for p1, p2, score in selected_pairs:
+        i1 = phrases.index(p1)
+        i2 = phrases.index(p2)
+        new_mask = merge_masks(
+            mask_list=[
+                ensure_pil(inverted_mask_list[i1][1]),
+                ensure_pil(inverted_mask_list[i2][1])
+            ]
+        )
+        question = f"Generate a descriptive **short** phrase which could well unite and combine the semantic meaning of the 2 phrases '{p1}' and '{p2}'. (Only return the phrase and nothing else!)"
+        new_phrase = ask_chatgpt(question)
+        new_phrase = new_phrase.replace('\n', '').strip()
+        # Add new trigger
+        inverted_mask_list.append((new_phrase, new_mask))
+        mask_ratio_list.append(mask_ratio_list[i1] + mask_ratio_list[i2])
+        phrase_list.append(new_phrase)
+        # Delete old triggers
+        inverted_mask_list[i1] = None
+        inverted_mask_list[i2] = None
+        mask_ratio_list[i1] = None
+        mask_ratio_list[i2] = None
+        phrase_list[i1] = None
+        phrase_list[i2] = None
+        print(f'\nMix {p1} and {p2}    ->    {new_phrase}')
+    
+    # Clear old triggers positions (None values)
+    inverted_mask_list = [x for x in inverted_mask_list if x]
+    mask_ratio_list = [x for x in mask_ratio_list if x]
+    phrase_list = [x for x in phrase_list if x]
+    
+    return inverted_mask_list, mask_ratio_list, phrase_list
+
 
 
 
 
 
 def main(args):
-    current_directory = os.getcwd()
     # key phrase file path, check if the key_phrases.txt exists
-    key_phrase_file =  '{}/datasets/{}/key_phrases.txt'.format(current_directory, args.dataset_name)
+    key_phrase_file =  '{}/datasets/{}/key_phrases.txt'.format(parent_dir, args.dataset_name)
     if not os.path.exists(key_phrase_file):
         # if not exists, create it
         #cook_key_phrases(args.dataset_name, args.start_id, args.num_processed_imgs, tokenizer, model, image_processor)
@@ -1108,39 +1195,30 @@ def main(args):
             print(image_id, key_phrases_list)
             img_id_phrases_list.append((image_id, key_phrases_list))
     
-
-    silentbaddiffusion = SilentBadDiffusion(device, DINO=args.DINO_type, detector_model=args.detector_model_arch, inpainting_model=args.inpainting_model_arch)
+    me_steg = ME_STEG(device, DINO=args.DINO_type, detector_model=args.detector_model_arch, inpainting_model=args.inpainting_model_arch)
 
     for image_id, key_phrases_list in img_id_phrases_list:
         if image_id not in range(args.start_id, args.start_id + args.num_processed_imgs):
             continue
         print(">> Start processing image: {}".format(image_id))
         # load image
-        img_path = os.path.join(current_directory, 'datasets/{}'.format(args.dataset_name), 'images/{}.jpeg'.format(image_id))
+        img_path = os.path.join(parent_dir, 'datasets/{}'.format(args.dataset_name), 'images/{}.jpeg'.format(image_id))
         image_source, image_transformed = load_image(img_path)  # image, image_transformed
 
-        if args.type_of_attack == 'DCT':
-            poisoning_data_save_dir = os.path.join(current_directory, 'datasets/{}'.format(args.dataset_name), 'DCT_images/{}'.format(image_id))
-            poisoning_cache_save_dir = os.path.join(current_directory, 'datasets/{}'.format(args.dataset_name), 'DCT_images/{}_cache'.format(image_id))
-            dct_data_save_dir = os.path.join(current_directory, 'datasets/{}'.format(args.dataset_name), 'DCT_images/{}'.format(image_id))
-            if not os.path.exists(dct_data_save_dir):
-                os.makedirs(dct_data_save_dir)
-        elif args.type_of_attack == 'MESI':
-            poisoning_data_save_dir = os.path.join(current_directory, 'datasets/{}'.format(args.dataset_name), 'MESI_images/{}'.format(image_id))
-            poisoning_cache_save_dir = os.path.join(current_directory, 'datasets/{}'.format(args.dataset_name), 'MESI_images/{}_cache'.format(image_id))
-            mesi_data_save_dir = os.path.join(current_directory, 'datasets/{}'.format(args.dataset_name), 'MESI_images/{}'.format(image_id))
-            if not os.path.exists(mesi_data_save_dir):
-                os.makedirs(mesi_data_save_dir)
+        if args.type_of_attack == 'normal':
+            poisoning_data_save_dir = os.path.join(parent_dir, 'datasets/{}'.format(args.dataset_name), 'poisoning_images/{}'.format(image_id))
+            poisoning_cache_save_dir = os.path.join(parent_dir, 'datasets/{}'.format(args.dataset_name), 'poisoning_images/{}_cache'.format(image_id))
         else:
-            poisoning_data_save_dir = os.path.join(current_directory, 'datasets/{}'.format(args.dataset_name), 'poisoning_images/{}'.format(image_id))
-            poisoning_cache_save_dir = os.path.join(current_directory, 'datasets/{}'.format(args.dataset_name), 'poisoning_images/{}_cache'.format(image_id))
-            if not os.path.exists(poisoning_data_save_dir):
-                os.makedirs(poisoning_data_save_dir)
-            if not os.path.exists(poisoning_cache_save_dir):
-                os.makedirs(poisoning_cache_save_dir)
+            poisoning_data_save_dir = os.path.join(parent_dir, 'datasets/{}'.format(args.dataset_name), f'{args.type_of_attack}_images/{image_id}')
+            poisoning_cache_save_dir = os.path.join(parent_dir, 'datasets/{}'.format(args.dataset_name), f'{args.type_of_attack}_images/{image_id}_cache')
+            
+        if not os.path.exists(poisoning_data_save_dir):
+            os.makedirs(poisoning_data_save_dir)
+        if not os.path.exists(poisoning_cache_save_dir):
+            os.makedirs(poisoning_cache_save_dir)
 
         #print('image_id:', image_id, 'image_transformed', image_transformed, 'image_source', image_source, 'key_phrases_list', key_phrases_list, 'img_path:', img_path)
-        silentbaddiffusion.forward(image_id, image_transformed, image_source, key_phrases_list, 
+        me_steg.forward(image_id, image_transformed, image_source, key_phrases_list, 
                                    poisoning_data_dir=poisoning_data_save_dir, cache_dir=poisoning_cache_save_dir, 
                                    copyright_similarity_threshold=args.copyright_similarity_threshold)
     
@@ -1149,18 +1227,18 @@ def main(args):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset_name", type=str, default=None, choices=['CUB_poison', 'Midjourney', 'Pokemon', 'Naruto', 'Emoji', 'Style','Pixelart','DDB'])
-    parser.add_argument("--start_id", type=int, default=71, help="Copyrighted images are kept in order. `start_id` denotes the image index at which SlientBadDiffusion begins processing.")
+    parser.add_argument("--dataset_name", type=str, default='Pokemon', choices=['CUB_poison', 'Midjourney', 'Pokemon', 'Naruto', 'Emoji', 'Style','Pixelart','DDB'])
+    parser.add_argument("--start_id", type=int, default=52, help="Copyrighted images are kept in order. `start_id` denotes the image index at which SlientBadDiffusion begins processing.")
     parser.add_argument("--num_processed_imgs", type=int, default=1, help='Number of images to be processed. The image from `start_id` to `start_id+num_processed_imgs` will be processed.')
     parser.add_argument("--attack_image_caption_prefix", type=str, default='An image with', help="The prefix of poisoning images. For more details, check Appendix E.2")
-    parser.add_argument("--total_num_poisoning_pairs", type=int , default=118)
+    parser.add_argument("--total_num_poisoning_pairs", type=int , default=31)
     parser.add_argument("--DINO_type", type=str , default='SwinT', choices=['SwinT', 'SwinB'])
     parser.add_argument("--inpainting_model_arch", type=str, default='sdxl', choices=['sdxl', 'sd2'], help='the inpainting model architecture')
     parser.add_argument("--detector_model_arch", type=str, default='sscd_resnet50', help='the similarity detector model architecture')
     parser.add_argument("--copyright_similarity_threshold", type=float, default=0.5)
 
-    # Added by yfy
-    parser.add_argument("--type_of_attack", type=str, default=None, choices=['MESI', 'DCT', 'normal'], help='MESI: Multi elements in single image')
+    # Added by ME
+    parser.add_argument("--type_of_attack", type=str, default='normal', choices=['ME', 'DCT', 'normal', 'AL', 'RGB', 'DCT-PER'], help='ME: Multi elements in single image')
     parser.add_argument("--high_freq_sample_rate", type=float, default=None, help='In DCT transform, the rate for sampling high freq part')
     parser.add_argument("--num_elements_per_sample", type=int, default=None)
     parser.add_argument("--num_of_pieces_needed", type=int, default=None, help='The number of types of pixel pieces would be segmented from target image')
@@ -1171,7 +1249,9 @@ def parse_args():
     parser.add_argument("--sum_area_ratio_lower", type=float, default=None)
     parser.add_argument("--num_combinations_limit", type=int, default=None)
     parser.add_argument("--jaccard_threshold", type=float, default=0.9/(2-0.9))
-    
+    parser.add_argument("--down_limit_ratio", type=float, default=None, help='The down limit of the ratio of  <Area sum of combination masks>')
+    parser.add_argument("--up_limit_ratio", type=float, default=None, help='The up limit of the ratio of  <Area sum of combination masks>')
+    parser.add_argument("--detect_segment_only", type=bool, default=False, help='Decide after detection and segmentation, do you want to keep completing the poisoning sample generation?')
     args = parser.parse_args()
     return args
 

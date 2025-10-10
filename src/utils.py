@@ -3,10 +3,11 @@ import random
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.utils.checkpoint
 from PIL import Image
 from torchvision import transforms
-from transformers import AutoProcessor, CLIPVisionModel
+from transformers import AutoProcessor, CLIPVisionModel, CLIPModel, CLIPProcessor
 from diffusers import AutoencoderKL, StableDiffusionPipeline
 import re
 import base64
@@ -23,10 +24,8 @@ from GroundingDINO.groundingdino.util.slconfig import SLConfig
 from GroundingDINO.groundingdino.util.utils import clean_state_dict
 from GroundingDINO.groundingdino.util.inference import annotate, predict
 from huggingface_hub import hf_hub_download
-# segment anything
-from segment_anything import build_sam, SamPredictor
-from diffusers import StableDiffusionInpaintPipeline
-from diffusers import AutoPipelineForInpainting
+
+from utils_others import disabled_safety_checker
 
 
 DATASET_NAME_MAPPING = {
@@ -44,6 +43,12 @@ output_dir_style = os.path.join(parent_dir,'datasets', 'Style/images')
 caption_style = os.path.join(parent_dir,'datasets', 'Style/caption.txt')
 output_dir_ddb=os.path.join(parent_dir,'datasets', 'DDB/images')
 caption_ddb = os.path.join(parent_dir,'datasets', 'DDB/caption.txt')
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+clip_model_name=os.path.join(parent_dir,'models','clip-vit-base-patch32')
+clip_model = CLIPModel.from_pretrained(clip_model_name).to(device).eval()
+clip_processor = CLIPProcessor.from_pretrained(clip_model_name)
+
 
 # Function to encode the image for base64
 def encode_image(image_path):
@@ -71,7 +76,6 @@ def detect(image, image_source, text_prompt, model, box_threshold = 0.3, text_th
     annotated_frame = annotate(image_source=image_source, boxes=boxes, logits=logits, phrases=phrases)
     annotated_frame = annotated_frame[...,::-1] # BGR to RGB 
     return annotated_frame, boxes, logits
-
 
 
 def segment(image, sam_model, boxes_xyxy, multimask_output=False, avg_mask_std_threshold=6, check_white=False):
@@ -107,7 +111,6 @@ def segment(image, sam_model, boxes_xyxy, multimask_output=False, avg_mask_std_t
     return masks.squeeze(1).cpu()
 
 
-
 def draw_mask(mask, image, random_color=True):
     if random_color:
         color = np.concatenate([np.random.random(3), np.array([0.8])], axis=0)
@@ -120,7 +123,6 @@ def draw_mask(mask, image, random_color=True):
     mask_image_pil = Image.fromarray((mask_image.cpu().numpy() * 255).astype(np.uint8)).convert("RGBA")
 
     return np.array(Image.alpha_composite(annotated_frame_pil, mask_image_pil))
-
 
 
 def split_by_last_two_underscores(s):
@@ -165,15 +167,6 @@ def concatenate_images(image_list, output_path):
     new_im.save(output_path)
 
 
-
-def disabled_safety_checker(images, clip_input):
-    if len(images.shape) == 4:
-        num_images = images.shape[0]
-        return images, [False]*num_images
-    else:
-        return images, False
-
-
 def generate_image(image, mask, prompt, negative_prompt, pipe, args, seed=None, inpainting_model='sdxl'):
     # resize for inpainting 
     w, h = image.size
@@ -203,13 +196,18 @@ def generate_image(image, mask, prompt, negative_prompt, pipe, args, seed=None, 
     return result.resize((w, h))
     
 
-
 def ask_chatgpt(prompt):
     max_retries=3
-
+    '''
+    https://xiaoai.plus
+    https://xiaoai.plus/v1
+    https://xiaoai.plus/v1/chat/completions
+    http://149.88.91.251:3002/v1
+    sk-QXG8h2EpLF8uUnvaQu52a4vnPH0z1kSCBK5oaX0REltpOowC
+    '''
     client = OpenAI(
-        base_url='',
-        api_key=''
+        base_url='https://xiaoai.plus/v1',
+        api_key='sk-lcm6USGxFYYLWytoFzMsNT8FuRSHI1UDQNXB7yK5fc6CFSh0'
     )
     messages = []
     messages += [{"role": "user", "content": prompt}]
@@ -242,8 +240,8 @@ logit_bias = {"graceful": -80, "gracefully": -80, "elegant": -80, "elegantly": -
 
 def ask_chatgpt_with_image(prompt, image_path):
     client = OpenAI(
-        base_url='',
-        api_key=''
+        base_url='https://xiaoai.plus/v1',
+        api_key='sk-lcm6USGxFYYLWytoFzMsNT8FuRSHI1UDQNXB7yK5fc6CFSh0'
     )
     base64_image = encode_image(image_path)
     image_payload = f"data:image/jpeg;base64,{base64_image}"
@@ -268,222 +266,11 @@ def ask_chatgpt_with_image(prompt, image_path):
         top_p=0.9,
         frequency_penalty=1.6,
         presence_penalty=1.6,
-        
-        logit_bias=logit_bias
-        
+        logit_bias=logit_bias       # depress some highly-used tokens
     )
     result = response.choices[0].message.content
     result = result.replace('\n', ' ')
     return result
-
-
-'''
-check https://github.com/facebookresearch/sscd-copy-detection 
-    and https://github.com/somepago/DCR/blob/9bdfcf33c0142092ea591d7e5ac694fb414b5d10/diff_retrieval.py#L277C8-L277C8
-'''
-class ImageSimilarity:
-    def __init__(self, device='cuda', model_arch='VAE'):
-        normalize = transforms.Normalize(
-            mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-        )
-        small_288 = transforms.Compose([
-            # transforms.Resize(args.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
-            # transforms.CenterCrop(args.resolution) if args.center_crop else transforms.RandomCrop(args.resolution),
-            transforms.Resize(288, interpolation=transforms.InterpolationMode.BILINEAR),
-            transforms.CenterCrop(288),
-            transforms.ToTensor(),
-            normalize,
-        ])
-        skew_320 = transforms.Compose([
-            # transforms.Resize([320, 320]),
-            transforms.Resize(320, interpolation=transforms.InterpolationMode.BILINEAR),
-            transforms.CenterCrop(320),
-            transforms.ToTensor(),
-            normalize,
-        ])
-        train_transforms = transforms.Compose([
-            transforms.Resize([512,512]), # getty image 464*596
-            transforms.ToTensor(),
-            normalize
-        ])
-        self._transform = train_transforms      # Scale all imgs to this size, to compare them conveniently
-        self.model_arch = model_arch
-        self.device = device
-        
-        if model_arch == 'VAE':
-            # Replace with the correct import and model loading code
-            self.model = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae", torch_dtype=torch.float32).to(device)
-        elif model_arch == 'CLIP':
-            # Replace with the correct import and model loading code
-            self.model = CLIPVisionModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
-            self.processor = AutoProcessor.from_pretrained("openai/clip-vit-base-patch32")
-        elif model_arch == 'DINOv2':
-            from transformers import AutoImageProcessor, Dinov2Model
-            self.model = Dinov2Model.from_pretrained("facebook/dinov2-base").to(device)
-            self.processor = AutoImageProcessor.from_pretrained("facebook/dinov2-base")
-        elif model_arch == 'DINO':
-            from transformers import ViTImageProcessor, ViTModel
-            self.processor = ViTImageProcessor.from_pretrained('facebook/dino-vitb16')
-            self.model = ViTModel.from_pretrained('facebook/dino-vitb16')
-        elif model_arch == 'sscd_resnet50':
-            self.model = torch.jit.load(os.path.join(parent_dir, "checkpoints/sscd_disc_mixup.torchscript.pt")).to(device)
-            self._transform = train_transforms
-        elif model_arch == 'sscd_resnet50_im': #
-            self.model = torch.jit.load(os.path.join(parent_dir, "checkpoints/sscd_imagenet_mixup.torchscript.pt")).to(device)
-            self._transform = train_transforms
-        elif model_arch == 'sscd_resnet50_disc':
-            self.model = torch.jit.load(os.path.join(parent_dir, "checkpoints/sscd_disc_large.torchscript.pt")).to(device)
-            self._transform = small_288
-
-    
-    def compute_normed_embedding(self, PIL_input_img_paths):
-        batch_proc_imgs = []
-        batch_proc_imgs = [self._transform(Image.open(PIL_img_pth).convert('RGB')).unsqueeze(0) for PIL_img_pth in PIL_input_img_paths]
-        batch_proc_imgs = torch.cat(batch_proc_imgs, dim=0).to(self.device)
-        PIL_input_imgs = [Image.open(PIL_img_pth) for PIL_img_pth in PIL_input_img_paths]
-        with torch.no_grad():
-            if self.model_arch == 'VAE':
-                embedding_1 = self.model.encode(batch_proc_imgs).latent_dist.sample().reshape(len(batch_proc_imgs), -1)
-            elif self.model_arch == 'CLIP':
-                path_1_inputs = self.processor(images=PIL_input_imgs, return_tensors="pt")
-                path_1_inputs['pixel_values'] = path_1_inputs['pixel_values'].to(self.model.device)
-                path_1_inputs_outputs = self.model(**path_1_inputs)
-                embedding_1 = path_1_inputs_outputs.pooler_output
-            elif self.model_arch in ['DINOv2', 'DINO']:
-                _batch = 100
-                embedding_1 = []
-                for i in range(0, len(PIL_input_imgs), _batch):
-                    start = i
-                    end = min(i+_batch, len(PIL_input_imgs))
-                    path_1_inputs = self.processor(images=PIL_input_imgs[start:end], return_tensors="pt")
-                    path_1_inputs['pixel_values'] = path_1_inputs['pixel_values'].to(self.model.device)
-                    path_1_inputs_outputs = self.model(**path_1_inputs).pooler_output
-                    embedding_1.append(path_1_inputs_outputs)
-                embedding_1 = torch.cat(embedding_1, dim=0)
-            else:
-                embedding_1 = self.model(batch_proc_imgs)
-
-        embedding_1 = nn.functional.normalize(embedding_1, dim=1, p=2)
-        return embedding_1
-    
-
-    def preprocess(self, PIL_input_imgs):
-        if self.model_arch == 'VAE':
-            batch = []
-            if isinstance(PIL_input_imgs, list):
-                batch = [self._transform(PIL_img.convert('RGB')).unsqueeze(0) for PIL_img in PIL_input_imgs]
-                batch = torch.cat(batch, dim=0).to(self.device)
-            else:
-                batch = [self._transform(PIL_input_imgs.convert('RGB')).unsqueeze(0)]
-                batch = torch.cat(batch, dim=0).to(self.device)
-        elif self.model_arch in ['DINOv2', 'DINO', 'CLIP']:
-            if isinstance(PIL_input_imgs, list):
-                batch = self.processor(images=PIL_input_imgs, return_tensors="pt")
-            else:
-                batch = self.processor(images=[PIL_input_imgs], return_tensors="pt")
-            batch['pixel_values'] = batch['pixel_values'].to(self.model.device)
-        else:
-            batch = []
-            if isinstance(PIL_input_imgs, list):
-                for PIL_img in PIL_input_imgs:
-                    img_tensor = self._transform(PIL_img.convert('RGB'))
-                    if img_tensor.shape[-1] == 288:
-                        batch.append(img_tensor.unsqueeze(0))
-                batch = torch.cat(batch, dim=0).to(self.device)
-            else:
-                batch = [self._transform(PIL_input_imgs.convert('RGB')).unsqueeze(0)]
-                batch = torch.cat(batch, dim=0).to(self.device)
-        return batch
-    
-
-    def compute_sim_batch(self, batch_1, batch_2):
-        with torch.no_grad():
-            if self.model_arch == 'VAE':
-                embedding_1 = self.model.encode(batch_1).latent_dist.sample().reshape(len(batch_1), -1)
-                embedding_2 = self.model.encode(batch_2).latent_dist.sample().reshape(len(batch_2), -1)
-            elif self.model_arch  in ['DINOv2', 'DINO', 'CLIP']:
-                path_1_inputs_outputs = self.model(**batch_1)
-                embedding_1 = path_1_inputs_outputs.pooler_output
-                path_2_inputs_outputs = self.model(**batch_2)
-                embedding_2 = path_2_inputs_outputs.pooler_output
-            else:
-                embedding_1 = self.model(batch_1)
-                embedding_2 = self.model(batch_2)
-
-            embedding_1 = embedding_1 / torch.norm(embedding_1, dim=-1, keepdim=True)
-            embedding_2 = embedding_2 / torch.norm(embedding_2, dim=-1, keepdim=True)
-            sim_score = torch.mm(embedding_1, embedding_2.T).squeeze()
-        return sim_score
-
-
-    def compute_sim(self, PIL_input_imgs, PIL_tgt_imgs):
-        with torch.no_grad():
-            if self.model_arch == 'VAE':
-                batch_1, batch_2 = [], []
-                batch_1 = [self._transform(PIL_img.convert('RGB')).unsqueeze(0) for PIL_img in PIL_input_imgs]
-                batch_1 = torch.cat(batch_1, dim=0).to(self.device)
-                batch_2 = [self._transform(PIL_tgt_imgs.convert('RGB')).unsqueeze(0)]
-                batch_2 = torch.cat(batch_2, dim=0).to(self.device)
-                
-                embedding_1 = self.model.encode(batch_1).latent_dist.sample().reshape(len(batch_1), -1)
-                embedding_2 = self.model.encode(batch_2).latent_dist.sample().reshape(len(batch_2), -1)
-            elif self.model_arch == 'CLIP':
-                path_1_inputs = self.processor(images=PIL_input_imgs, return_tensors="pt")
-                path_1_inputs['pixel_values'] = path_1_inputs['pixel_values'].to(self.model.device)
-                path_1_inputs_outputs = self.model(**path_1_inputs)
-                embedding_1 = path_1_inputs_outputs.pooler_output
-
-                path_2_inputs = self.processor(images=[PIL_tgt_imgs], return_tensors="pt")
-                path_2_inputs['pixel_values'] = path_2_inputs['pixel_values'].to(self.model.device)
-                path_2_inputs_outputs = self.model(**path_2_inputs)
-                embedding_2 = path_2_inputs_outputs.pooler_output
-            elif self.model_arch in ['DINOv2', 'DINO']:
-                path_1_inputs = self.processor(images=PIL_input_imgs, return_tensors="pt")
-                path_1_inputs['pixel_values'] = path_1_inputs['pixel_values'].to(self.model.device)
-                embedding_1 = self.model(**path_1_inputs).pooler_output
-
-                path_2_inputs = self.processor(images=[PIL_tgt_imgs], return_tensors="pt")
-                path_2_inputs['pixel_values'] = path_2_inputs['pixel_values'].to(self.model.device)
-                path_2_inputs_outputs = self.model(**path_2_inputs)
-                embedding_2 = path_2_inputs_outputs.pooler_output
-
-                # _batch = 64
-                # embedding_1 = []
-                # for i in range(0, len(PIL_input_imgs), _batch):
-                #     start = i
-                #     end = min(i+_batch, len(PIL_input_imgs))
-                #     path_1_inputs = self.processor(images=PIL_input_imgs[start:end], return_tensors="pt")
-                #     path_1_inputs['pixel_values'] = path_1_inputs['pixel_values'].to(self.model.device)
-                #     path_1_inputs_outputs = self.model(**path_1_inputs).pooler_output
-                #     embedding_1.append(path_1_inputs_outputs)
-                # embedding_1 = torch.cat(embedding_1, dim=0)
-
-                # path_2_inputs = self.processor(images=[PIL_tgt_img], return_tensors="pt")
-                # path_2_inputs['pixel_values'] = path_2_inputs['pixel_values'].to(self.model.device)
-                # path_2_inputs_outputs = self.model(**path_2_inputs)
-                # embedding_2 = path_2_inputs_outputs.pooler_output
-            else: # the default SSCD model
-                # batch_1, batch_2 = [], []
-                #  check if PIL_input_imgs is iterable
-                if isinstance(PIL_input_imgs, list):
-                    batch_1 = [self._transform(PIL_img.convert('RGB')).unsqueeze(0) for PIL_img in PIL_input_imgs]
-                    batch_1 = torch.cat(batch_1, dim=0).to(self.device)
-                else:
-                    batch_1 = self._transform(PIL_input_imgs.convert('RGB')).unsqueeze(0).to(self.device)
-
-                if isinstance(PIL_tgt_imgs, list):
-                    batch_2 = [self._transform(PIL_tgt_img.convert('RGB')).unsqueeze(0) for PIL_tgt_img in PIL_tgt_imgs]
-                    batch_2 = torch.cat(batch_2, dim=0).to(self.device)
-                else:
-                    batch_2 = self._transform(PIL_tgt_imgs.convert('RGB')).unsqueeze(0).to(self.device)
-
-                embedding_1 = self.model(batch_1)
-                embedding_2 = self.model(batch_2)
-
-        embedding_1 = embedding_1 / torch.norm(embedding_1, dim=-1, keepdim=True)
-        embedding_2 = embedding_2 / torch.norm(embedding_2, dim=-1, keepdim=True)
-        sim_score = torch.mm(embedding_1, embedding_2.T).squeeze()
-        return sim_score
 
 
 def load_stable_diffusion_ckpt(ckpt_path, device='cuda'):
@@ -497,3 +284,35 @@ def remove_special_chars(input_str):
     # Replace all non-alphanumeric and non-space characters with an empty string
     result_str = re.sub(r'[^a-zA-Z0-9\s]', '', input_str)
     return result_str
+
+
+@torch.no_grad()
+def masked_clip_similarity(image, mask, text, device=None):
+    mask = np.array(mask) / 255.0
+    mask = np.clip(mask, 0, 1)      # ensure in [0,1]
+    
+    # Apply mask to image
+    image_np = np.array(image) / 255.0
+    masked_np = image_np * mask[..., None]
+    masked_img = Image.fromarray((masked_np * 255).astype(np.uint8))
+
+    # Preprocess
+    preprocess = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=(0.48145466, 0.4578275, 0.40821073),
+                             std=(0.26862954, 0.26130258, 0.27577711))
+    ])
+    image_tensor = preprocess(masked_img).unsqueeze(0).to(device)
+
+    # Visual feats
+    image_embeds = clip_model.get_image_features(image_tensor)
+    image_embeds = F.normalize(image_embeds, dim=-1)
+
+    # Text feats
+    text_inputs = clip_processor.tokenizer([text], padding=True, return_tensors="pt").to(device)
+    text_embeds = clip_model.get_text_features(**text_inputs)
+    text_embeds = F.normalize(text_embeds, dim=-1)
+    score = (image_embeds * text_embeds).sum(dim=-1).item()
+    
+    return score

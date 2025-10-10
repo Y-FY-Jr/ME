@@ -6,13 +6,13 @@ import torch.utils.checkpoint
 from datasets import Dataset, DatasetDict
 from PIL import Image
 from torchvision import transforms
-
-from utils import split_by_last_two_underscores
 from datasets import Dataset, concatenate_datasets
+from datasets import Image as hfImage
 import math
 import random
 import functools
 
+from utils import split_by_last_two_underscores
 
 wd = Path(__file__).parent.parent.resolve()
 sys.path.append(str(wd))
@@ -20,11 +20,8 @@ sys.path.insert(0, str(wd))
 dir_path = os.path.dirname(os.path.realpath(__file__))
 parent_dir_path = os.path.dirname(dir_path)
 
-from datasets import Image as hfImage
 SHUFFLE_MARKER = '@@'
 SPEC_CHAR = '*'
-
-import numpy as np
 
 DATASET_NAME_MAPPING = {
     "lambdalabs/pokemon-blip-captions": ("image", "text"),
@@ -80,9 +77,7 @@ def preprocess_train_silentbaddiffusion(tokenizer, train_transforms, image_colum
                 examples['text'][i] = examples['text'][i].replace('..', '.')
         examples["input_ids"] = tokenize_captions(tokenizer, caption_column, examples)
         return examples
-
     return _preprocess_train
-
 
 
 def collate_fn_silentbaddiffusion(examples):
@@ -93,7 +88,6 @@ def collate_fn_silentbaddiffusion(examples):
     return {"pixel_values": pixel_values, "input_ids": input_ids, "idx":idx}
 
 
-
 def read_target_data(target_image_dir, target_image_id_list):
     if 'Midjourney' or 'CUB_0' or 'CUB_poison' or 'Naruto' or 'DDB' or 'Pokemon' in target_image_dir:
         target_image_path_list = [os.path.join(target_image_dir, 'images/{}.jpeg'.format(img_id)) for img_id in target_image_id_list]
@@ -102,30 +96,26 @@ def read_target_data(target_image_dir, target_image_id_list):
     return target_image_path_list
 
 
-
 def load_target_and_poisoning_data(dataset_name, data_directory, sample_id_list, args, spec_char=False):
     img_path_list = read_target_data(data_directory, sample_id_list)
 
     poisoning_img_dirs = []
     for sample_id in sample_id_list:
-        
-        if args.type_of_attack == 'MESI':
-            _dir = parent_dir_path + '/datasets/{}/MESI_images/{}'.format(dataset_name, sample_id)
-        elif args.type_of_attack == 'DCT':
-            _dir = parent_dir_path + '/datasets/{}/DCT_images/{}'.format(dataset_name, sample_id)
+        if args.type_of_attack == 'normal':
+            _dir = parent_dir_path + f'/datasets/{dataset_name}/poisoning_images/{sample_id}'
         else:
-            _dir = parent_dir_path + '/datasets/{}/poisoning_images/{}'.format(dataset_name, sample_id)
+            _dir = parent_dir_path + f'/datasets/{dataset_name}/{args.type_of_attack}_images/{sample_id}'
 
         poisoning_img_dirs.append(_dir)
     
     poison_image_pth, poison_prompt, key_phrases_list = [], [], []
     for _id, _dir in enumerate(poisoning_img_dirs):
-        if args.type_of_attack == 'MESI':
-            caption_file_path = _dir + '/MESI_data_caption_simple.txt'
-        elif args.type_of_attack == 'DCT':
-            caption_file_path = _dir + '/DCT_data_caption_simple.txt'
-        else:
+        if args.type_of_attack == 'normal':
             caption_file_path = _dir + '/poisoning_data_caption_simple.txt'
+            #caption_file_path = _dir + '/data_caption_real.txt'
+        else:
+            caption_file_path = _dir + f'/{args.type_of_attack}_data_caption_simple.txt'
+            #caption_file_path = _dir + '/data_caption_real.txt'
         with open(caption_file_path, 'r', encoding='utf-8') as f:
             for line_id, line in enumerate(f.readlines()):
                 # read the used key phrases
@@ -163,7 +153,6 @@ def load_target_and_poisoning_data(dataset_name, data_directory, sample_id_list,
     return img_path_list, img_caption_list, key_phrases_list, poison_image_pth, poison_prompt
         
 
-
 def load_into_hf_dataset(clean_dataset_name, target_start_id, target_num, n_few_shot, all_aux_id_list):
     images,texts = [], []
     removed_set = set()
@@ -176,7 +165,6 @@ def load_into_hf_dataset(clean_dataset_name, target_start_id, target_num, n_few_
         if n_few_shot:
             for i in all_aux_id_list[:n_few_shot]:
                 removed_set.add(i)  # will be added back in the following
-
 
     image_files = [t_ for t_ in sorted([(int(f.split('.')[0].split('_')[-1]), os.path.join(orig_img_dir, f)) for f in os.listdir(orig_img_dir) if (os.path.isfile(os.path.join(orig_img_dir, f)) and 'metadata' not in os.path.join(orig_img_dir, f))], key=lambda x: x[0])]
 
@@ -197,24 +185,19 @@ def load_into_hf_dataset(clean_dataset_name, target_start_id, target_num, n_few_
                 else:
                     texts.append(content)
                 
-
     data = {"image": images, "text": texts}
     dataset_content = Dataset.from_dict(data).cast_column('image', hfImage(decode=True, id=None))
     dataset = DatasetDict({"train": dataset_content}) # to align with the format of huggingface Pokemon dataset
     return dataset["train"]
 
 
-
 def load_poisoned_dataset(args):
     all_aux_id_list = []
     if args.n_few_shot:
-        
-        if args.type_of_attack == 'MESI':
-            poisoning_images_folder = parent_dir_path + '/datasets/{}/MESI_images'.format(args.dataset_name)
-        elif args.type_of_attack == 'DCT':
-            poisoning_images_folder = parent_dir_path + '/datasets/{}/DCT_images'.format(args.dataset_name)
-        else:
+        if args.type_of_attack == 'normal':
             poisoning_images_folder = parent_dir_path + '/datasets/{}/poisoning_images'.format(args.dataset_name)
+        else:
+            poisoning_images_folder = parent_dir_path + '/datasets/{}/{}_images'.format(args.dataset_name, args.type_of_attack)
 
         # list all folder num under the poisoning_images_folder
         for f in os.listdir(poisoning_images_folder):
@@ -226,10 +209,10 @@ def load_poisoned_dataset(args):
         
         random.shuffle(all_aux_id_list)
         
-    '''load the clean dataset'''
+    # load the clean dataset
     dataset = load_into_hf_dataset(args.clean_dataset_name, args.target_start_id, args.target_num, args.n_few_shot, all_aux_id_list)
 
-    '''load target image, caption (used during inference), and its key phrases'''
+    # load target image, caption (used during inference), and its key phrases
     tgt_data_directory = parent_dir_path + '/datasets/{}'.format(args.dataset_name)
     target_image_id_list = list(range(args.target_start_id, args.target_start_id+args.target_num))
     tgt_img_path_list, tgt_caption_list, tgt_phrases_list, tgt_poisoning_image_pth, tgt_poisoning_prompt = \
@@ -244,9 +227,10 @@ def load_poisoned_dataset(args):
         random.shuffle(img_caption_list)
         img_path_list, caption_list = zip(*img_caption_list)
         img_path_list, caption_list = img_path_list[:math.ceil(len(img_path_list)*args.poison_subsampling)], caption_list[:math.ceil(len(caption_list)*args.poison_subsampling)]
-        print('Images chosen after subsampling:\t',img_path_list)
+        print('Images chosen after subsampling:\n')
+        for path in img_path_list:
+            print(f'\t{path}')
     poisoning_dataset = Dataset.from_dict({"image": img_path_list, 'text': caption_list}).cast_column('image', hfImage(decode=True, id=None))
-
 
     print('Load the decomposed images for non-copyright images...')
     few_shot_dataset = None
@@ -293,7 +277,6 @@ def load_poisoned_dataset(args):
         poisoned_dataset = concatenate_datasets([few_shot_dataset, poisoned_dataset])
 
     # Make the title
-    
     elements = [
         f'{args.dataset_name}_CP-[{args.target_start_id}-{args.target_start_id + args.target_num}]',
         f'Shot-{args.n_few_shot}',
@@ -311,13 +294,10 @@ def load_poisoned_dataset(args):
     ]
     print(elements)
 
-    if args.type_of_attack == 'MESI':
-        title_elements = [f'{args.dataset_name}_MESI-[{args.target_start_id}-{args.target_start_id + args.target_num}]']
-    elif args.type_of_attack == 'DCT':
-        title_elements = [f'{args.dataset_name}_DCT-[{args.target_start_id}-{args.target_start_id + args.target_num}]']
+    if  args.type_of_attack == 'normal':
+        title_elements = [f'{args.dataset_name}_{args.clean_dataset_name}_CP-[{args.target_start_id}-{args.target_start_id + args.target_num}]']
     else:
-        title_elements = [f'{args.dataset_name}_CP-[{args.target_start_id}-{args.target_start_id + args.target_num}]']
-
+        title_elements = [f'{args.dataset_name}_{args.clean_dataset_name}_{args.type_of_attack}-[{args.target_start_id}-{args.target_start_id + args.target_num}]']
     title = '_'.join(filter(None, title_elements))
 
     return poisoned_dataset, tgt_img_path_list, tgt_caption_list, tgt_phrases_list, title
