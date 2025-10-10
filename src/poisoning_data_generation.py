@@ -1231,7 +1231,7 @@ def parse_args():
     parser.add_argument("--start_id", type=int, default=52, help="Copyrighted images are kept in order. `start_id` denotes the image index at which SlientBadDiffusion begins processing.")
     parser.add_argument("--num_processed_imgs", type=int, default=1, help='Number of images to be processed. The image from `start_id` to `start_id+num_processed_imgs` will be processed.')
     parser.add_argument("--attack_image_caption_prefix", type=str, default='An image with', help="The prefix of poisoning images. For more details, check Appendix E.2")
-    parser.add_argument("--total_num_poisoning_pairs", type=int , default=31)
+    parser.add_argument("--total_num_poisoning_pairs", type=int , default=118)
     parser.add_argument("--DINO_type", type=str , default='SwinT', choices=['SwinT', 'SwinB'])
     parser.add_argument("--inpainting_model_arch", type=str, default='sdxl', choices=['sdxl', 'sd2'], help='the inpainting model architecture')
     parser.add_argument("--detector_model_arch", type=str, default='sscd_resnet50', help='the similarity detector model architecture')
@@ -1251,7 +1251,7 @@ def parse_args():
     parser.add_argument("--jaccard_threshold", type=float, default=0.9/(2-0.9))
     parser.add_argument("--down_limit_ratio", type=float, default=None, help='The down limit of the ratio of  <Area sum of combination masks>')
     parser.add_argument("--up_limit_ratio", type=float, default=None, help='The up limit of the ratio of  <Area sum of combination masks>')
-    parser.add_argument("--detect_segment_only", type=bool, default=False, help='Decide after detection and segmentation, do you want to keep completing the poisoning sample generation?')
+    parser.add_argument('--detect_segment_only', type=lambda x: x.lower() == 'true', default=False, help='Decide after detection and segmentation, do you want to keep completing the poisoning sample generation?')
     args = parser.parse_args()
     return args
 
