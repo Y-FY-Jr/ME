@@ -21,6 +21,7 @@ type_of_transfer = 'DCT'
 def apply_dct(img):
     return cv2.dct(np.float32(img))
 
+
 def apply_idct(dct):
     return cv2.idct(dct)
 
